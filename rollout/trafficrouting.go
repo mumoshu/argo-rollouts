@@ -9,6 +9,7 @@ import (
 	"github.com/argoproj/argo-rollouts/rollout/trafficrouting/istio"
 	"github.com/argoproj/argo-rollouts/rollout/trafficrouting/nginx"
 	"github.com/argoproj/argo-rollouts/rollout/trafficrouting/smi"
+	"github.com/argoproj/argo-rollouts/rollout/trafficrouting/workloadbalancer"
 
 	"github.com/argoproj/argo-rollouts/utils/record"
 	replicasetutil "github.com/argoproj/argo-rollouts/utils/replicaset"
@@ -69,11 +70,19 @@ func (c *Controller) NewTrafficRoutingReconciler(roCtx *rolloutContext) (Traffic
 		ac := ambassador.NewDynamicClient(c.dynamicclientset, rollout.GetNamespace())
 		return ambassador.NewReconciler(rollout, ac, c.recorder), nil
 	}
+	if rollout.Spec.Strategy.Canary.TrafficRouting.WorkloadBalancer != nil {
+		return workloadbalancer.NewReconciler(workloadbalancer.ReconcilerConfig{
+			Rollout:        rollout,
+			Client:         c.argoprojclientset,
+			Recorder:       c.recorder,
+			ControllerKind: controllerKind,
+		})
+	}
 	return nil, nil
 }
 
-func (c *rolloutContext) reconcileTrafficRouting() error {
-	reconciler, err := c.newTrafficRoutingReconciler(c)
+func (c *replicasetRolloutContext) reconcileTrafficRouting() error {
+	reconciler, err := c.newTrafficRoutingReconciler(&c.rolloutContext)
 	if err != nil {
 		return err
 	}

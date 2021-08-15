@@ -31,6 +31,8 @@ type ArgoprojV1alpha1Interface interface {
 	ClusterAnalysisTemplatesGetter
 	ExperimentsGetter
 	RolloutsGetter
+	WorkloadsGetter
+	WorkloadBalancersGetter
 }
 
 // ArgoprojV1alpha1Client is used to interact with features provided by the argoproj.io group.
@@ -56,6 +58,14 @@ func (c *ArgoprojV1alpha1Client) Experiments(namespace string) ExperimentInterfa
 
 func (c *ArgoprojV1alpha1Client) Rollouts(namespace string) RolloutInterface {
 	return newRollouts(c, namespace)
+}
+
+func (c *ArgoprojV1alpha1Client) Workloads(namespace string) WorkloadInterface {
+	return newWorkloads(c, namespace)
+}
+
+func (c *ArgoprojV1alpha1Client) WorkloadBalancers(namespace string) WorkloadBalancerInterface {
+	return newWorkloadBalancers(c, namespace)
 }
 
 // NewForConfig creates a new ArgoprojV1alpha1Client for the given config.

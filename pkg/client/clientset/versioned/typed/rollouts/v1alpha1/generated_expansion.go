@@ -27,3 +27,7 @@ type ClusterAnalysisTemplateExpansion interface{}
 type ExperimentExpansion interface{}
 
 type RolloutExpansion interface{}
+
+type WorkloadExpansion interface{}
+
+type WorkloadBalancerExpansion interface{}

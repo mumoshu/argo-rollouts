@@ -50,6 +50,9 @@ type RolloutSpec struct {
 	// WorkloadRef holds a references to a workload that provides Pod template
 	// +optional
 	WorkloadRef *ObjectRef `json:"workloadRef,omitempty" protobuf:"bytes,10,opt,name=workloadRef"`
+	// WorkloadTemplate holds metadata and spec to dynamically generate Workload objects
+	// +optional
+	WorkloadTemplate *WorkloadTemplate `json:"workloadTemplate,omitempty" protobuf:"bytes:12,opt,name=workloadTemplate"`
 	// Minimum number of seconds for which a newly created pod should be ready
 	// without any of its container crashing, for it to be considered available.
 	// Defaults to 0 (pod will be considered available as soon as it is ready)
@@ -131,6 +134,123 @@ type ObjectRef struct {
 	Name string `json:"name,omitempty" protobuf:"bytes,3,opt,name=name"`
 }
 
+// WorkloadTemplate is used to dynamically generate Workload objects
+type WorkloadTemplate struct {
+	// API Version of the objects to be generated
+	APIVersion string `json:"apiVersion,omitempty" protobuf:"bytes,1,opt,name=apiVersion"`
+	// Kind of the objects to be generated
+	Kind string `json:"kind,omitempty" protobuf:"bytes,2,opt,name=kind"`
+
+	// ObjectMeta is the metadata of the objects to be genereated
+	PodTemplateMetadata `json:"metadata,omitempty" protobuf:"bytes,3,opt,name=metadata"`
+
+	// Spec of the objects to be generated
+	Spec WorkloadSpec `json:"spec,omitempty" protobuf:"bytes,4,opt,name=sp[ec"`
+}
+
+// +genclient
+// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
+// +kubebuilder:resource:path=workloads,shortName=wl
+// +kubebuilder:printcolumn:name="Controller",type="string",JSONPath=".spec.controllerName",description="Name of the controller that manages this workload"
+// +kubebuilder:printcolumn:name="Ready",type="boolean",JSONPath=".status.ready",description="Readiness of the workload"
+// +kubebuilder:printcolumn:name="Phase",type="string",JSONPath=".status.phase",description="Phase of the workload"
+// +kubebuilder:subresource:status
+
+// Workload is a specification for a Workload resource
+type Workload struct {
+	metav1.TypeMeta   `json:",inline"`
+	metav1.ObjectMeta `json:"metadata,omitempty" protobuf:"bytes,1,opt,name=metadata"`
+
+	Spec   WorkloadSpec   `json:"spec" protobuf:"bytes,2,opt,name=spec"`
+	Status WorkloadStatus `json:"status,omitempty" protobuf:"bytes,3,opt,name=status"`
+}
+
+// WorkloadSpec is the spec for a Workload resource
+type WorkloadSpec struct {
+	ControllerName string `json:"controllerName,omitempty" protobuf:"bytes,1,opt,name=controllerName"`
+
+	// +optional
+	Variables map[string]string `json:"variables,omitempty" protobuf:"bytes,2,opt,name=variables"`
+}
+
+// WorkloadStatus is the status for a Workload resource
+type WorkloadStatus struct {
+	// +optional
+	Ready *bool
+	// +optional
+	Phase *string
+}
+
+// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
+
+// WorkloadList is a list of Workload resources
+type WorkloadList struct {
+	metav1.TypeMeta `json:",inline"`
+	metav1.ListMeta `json:"metadata" protobuf:"bytes,1,opt,name=metadata"`
+
+	Items []Workload `json:"items" protobuf:"bytes,2,rep,name=items"`
+}
+
+// +genclient
+// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
+// +kubebuilder:resource:path=workloadbalancers,shortName=wb
+// +kubebuilder:printcolumn:name="Controller",type="string",JSONPath=".spec.controllerName",description="Name of the controller that manages this workload"
+// +kubebuilder:printcolumn:name="Ready",type="boolean",JSONPath=".status.ready",description="Readiness of the workload"
+// +kubebuilder:printcolumn:name="Phase",type="string",JSONPath=".status.phase",description="Phase of the workload"
+// +kubebuilder:subresource:status
+
+// WorkloadBalancer is a specification for a WorkloadBalancer resource
+type WorkloadBalancer struct {
+	metav1.TypeMeta   `json:",inline"`
+	metav1.ObjectMeta `json:"metadata,omitempty" protobuf:"bytes,1,opt,name=metadata"`
+
+	Spec   WorkloadBalancerSpec   `json:"spec" protobuf:"bytes,2,opt,name=spec"`
+	Status WorkloadBalancerStatus `json:"status,omitempty" protobuf:"bytes,3,opt,name=status"`
+}
+
+// WorkloadBalancerSpec is the spec for a WorkloadBalancer resource
+type WorkloadBalancerSpec struct {
+	ControllerName string `json:"controllerName,omitempty" protobuf:"bytes,1,opt,name=controllerName"`
+
+	Backends []WorkloadBalancerBackend `json:"backends,omitempty" protobuf:"bytes,2,opt,name=backends"`
+
+	// +optional
+	Variables map[string]string `json:"variables,omitempty" protobuf:"bytes,3,opt,name=variables"`
+}
+
+type WorkloadBalancerBackend struct {
+	Name string `json:"name,omitempty" protobuf:"bytes,1,opt,name=name"`
+
+	Weight *int32 `json:"weight,omitempty" protobuf:"bytes,2,opt,name=weight"`
+}
+
+// WorkloadBalancerStatus is the status for a WorkloadBalancer resource
+type WorkloadBalancerStatus struct {
+	// The generation observed by the workload balancer controller from metadata.generation
+	// +optional
+	ObservedGeneration int64 `json:"observedGeneration,omitempty" protobuf:"bytes,1,opt,name=observedGeneration"`
+	// +optional
+	Ready *bool `json:"ready,omitempty" protobuf:"bytes,2,opt,name=ready"`
+	// +optional
+	Phase *string `json:"phase,omitempty" protobuf:"bytes,3,opt,name=phase"`
+}
+
+// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
+
+// WorkloadBalancerList is a list of WorkloadBalancer resources
+type WorkloadBalancerList struct {
+	metav1.TypeMeta `json:",inline"`
+	metav1.ListMeta `json:"metadata" protobuf:"bytes,1,opt,name=metadata"`
+
+	Items []WorkloadBalancer `json:"items" protobuf:"bytes,2,rep,name=items"`
+}
+
+type WorkloadBalancerTemplate struct {
+	PodTemplateMetadata `json:"metadata,omitempty" protobuf:"bytes,1,opt,name=metadata"`
+
+	Spec WorkloadBalancerSpec `json:"spec" protobuf:"bytes,2,opt,name=spec"`
+}
+
 const (
 	// DefaultRolloutUniqueLabelKey is the default key of the selector that is added
 	// to existing ReplicaSets (and label key that is added to its pods) to prevent the existing ReplicaSets
@@ -147,6 +267,10 @@ const (
 	// LabelKeyControllerInstanceID is the label the controller uses for the rollout, experiment, analysis segregation
 	// between controllers. Controllers will only operate on objects with the same instanceID as the controller.
 	LabelKeyControllerInstanceID = "argo-rollouts.argoproj.io/controller-instance-id"
+
+	// WorkloadTemplateHashLabelKey is the default key of the selector that is added
+	// to identify managed workloads
+	WorkloadTemplateHashLabelKey string = "rollouts-workload-template-hash"
 )
 
 // RolloutStrategy defines strategy to apply during next rollout
@@ -331,6 +455,16 @@ type RolloutTrafficRouting struct {
 	SMI *SMITrafficRouting `json:"smi,omitempty" protobuf:"bytes,4,opt,name=smi"`
 	// Ambassador holds specific configuration to use Ambassador to route traffic
 	Ambassador *AmbassadorTrafficRouting `json:"ambassador,omitempty" protobuf:"bytes,5,opt,name=ambassador"`
+	// WorkloadBalancer holds specific configuration to use WorkloadBalancer to route traffic
+	WorkloadBalancer *WorkloadBablancerTrafficRouting `json:"workloadBalancer,omitempty" protobuf:"bytes,6,opt,name=workloadBalancer"`
+}
+
+// WorkloadBablancerTrafficRouting
+type WorkloadBablancerTrafficRouting struct {
+	// Name holds the name of the WorkloadBablancer
+	Name string `json:"name" protobuf:"bytes,1,opt,name=name"`
+
+	Template WorkloadBalancerTemplate `json:"template,omitempty" protobuf:"bytes,2,opt,name=template"`
 }
 
 // AmbassadorTrafficRouting defines the configuration required to use Ambassador as traffic

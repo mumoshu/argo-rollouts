@@ -53,3 +53,19 @@ type RolloutListerExpansion interface{}
 // RolloutNamespaceListerExpansion allows custom methods to be added to
 // RolloutNamespaceLister.
 type RolloutNamespaceListerExpansion interface{}
+
+// WorkloadListerExpansion allows custom methods to be added to
+// WorkloadLister.
+type WorkloadListerExpansion interface{}
+
+// WorkloadNamespaceListerExpansion allows custom methods to be added to
+// WorkloadNamespaceLister.
+type WorkloadNamespaceListerExpansion interface{}
+
+// WorkloadBalancerListerExpansion allows custom methods to be added to
+// WorkloadBalancerLister.
+type WorkloadBalancerListerExpansion interface{}
+
+// WorkloadBalancerNamespaceListerExpansion allows custom methods to be added to
+// WorkloadBalancerNamespaceLister.
+type WorkloadBalancerNamespaceListerExpansion interface{}

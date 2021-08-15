@@ -40,7 +40,7 @@ func TestGetExperiments(t *testing.T) {
 }
 
 func TestSortExperimentsByPodHash(t *testing.T) {
-	emptyMap := SortExperimentsByPodHash(nil)
+	emptyMap := SortExperimentsByPodHash(nil, v1alpha1.DefaultRolloutUniqueLabelKey)
 	assert.NotNil(t, 0)
 	assert.Len(t, emptyMap, 0)
 	name := "a"
@@ -64,7 +64,7 @@ func TestSortExperimentsByPodHash(t *testing.T) {
 		ex(pointer.StringPtr("abc")),
 		ex(pointer.StringPtr("abc")),
 	}
-	exMap := SortExperimentsByPodHash(exs)
+	exMap := SortExperimentsByPodHash(exs, v1alpha1.DefaultRolloutUniqueLabelKey)
 	assert.Len(t, exMap, 2)
 	assert.Len(t, exMap["ab"], 1)
 	assert.Len(t, exMap["abc"], 2)

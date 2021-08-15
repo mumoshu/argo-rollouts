@@ -44,14 +44,14 @@ func GetOldExperiments(rollout *v1alpha1.Rollout, exList []*v1alpha1.Experiment)
 }
 
 // SortExperimentsByPodHash returns map with a podHash as a key and an array of experiments with that pod hash
-func SortExperimentsByPodHash(exs []*v1alpha1.Experiment) map[string][]*v1alpha1.Experiment {
+func SortExperimentsByPodHash(exs []*v1alpha1.Experiment, key string) map[string][]*v1alpha1.Experiment {
 	podHashToEx := map[string][]*v1alpha1.Experiment{}
 	if exs == nil {
 		return podHashToEx
 	}
 	for i := range exs {
 		ex := exs[i]
-		podHash, ok := ex.Labels[v1alpha1.DefaultRolloutUniqueLabelKey]
+		podHash, ok := ex.Labels[key]
 		if !ok {
 			continue
 		}

@@ -11,7 +11,7 @@ import (
 )
 
 // reconcileEphemeralMetadata syncs canary/stable ephemeral metadata to ReplicaSets and pods
-func (c *rolloutContext) reconcileEphemeralMetadata() error {
+func (c *replicasetRolloutContext) reconcileEphemeralMetadata() error {
 	ctx := context.TODO()
 	var newMetadata, stableMetadata *v1alpha1.PodTemplateMetadata
 	if c.rollout.Spec.Strategy.Canary != nil {

@@ -67,7 +67,7 @@ func (c rolloutContext) switchServiceSelector(service *corev1.Service, newRollou
 	return err
 }
 
-func (c *rolloutContext) reconcilePreviewService(previewSvc *corev1.Service) error {
+func (c *replicasetRolloutContext) reconcilePreviewService(previewSvc *corev1.Service) error {
 	if previewSvc == nil {
 		return nil
 	}
@@ -80,7 +80,7 @@ func (c *rolloutContext) reconcilePreviewService(previewSvc *corev1.Service) err
 	return nil
 }
 
-func (c *rolloutContext) reconcileActiveService(activeSvc *corev1.Service) error {
+func (c *replicasetRolloutContext) reconcileActiveService(activeSvc *corev1.Service) error {
 	if !replicasetutil.ReadyForPause(c.rollout, c.newRS, c.allRSs) || !annotations.IsSaturated(c.rollout, c.newRS) {
 		c.log.Infof("skipping active service switch: New RS '%s' is not fully saturated", c.newRS.Name)
 		return nil
@@ -123,7 +123,7 @@ func (c *rolloutContext) getPreviewAndActiveServices() (*corev1.Service, *corev1
 	return previewSvc, activeSvc, nil
 }
 
-func (c *rolloutContext) reconcileStableAndCanaryService() error {
+func (c *replicasetRolloutContext) reconcileStableAndCanaryService() error {
 	if c.rollout.Spec.Strategy.Canary == nil {
 		return nil
 	}
@@ -158,7 +158,7 @@ func (c *rolloutContext) ensureSVCTargets(svcName string, rs *appsv1.ReplicaSet)
 	return nil
 }
 
-func (c *rolloutContext) newRSReady() bool {
+func (c *replicasetRolloutContext) newRSReady() bool {
 	if c.newRS == nil {
 		return false
 	}

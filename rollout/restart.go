@@ -39,7 +39,7 @@ type RolloutPodRestarter struct {
 }
 
 // checkEnqueueRollout enqueues a Rollout if the Rollout's restartedAt is within the next resync
-func (p RolloutPodRestarter) checkEnqueueRollout(roCtx *rolloutContext) {
+func (p RolloutPodRestarter) checkEnqueueRollout(roCtx *replicasetRolloutContext) {
 	logCtx := roCtx.log.WithField("Reconciler", "PodRestarter")
 	now := nowFn().UTC()
 	if roCtx.rollout.Spec.RestartAt == nil || now.After(roCtx.rollout.Spec.RestartAt.Time) {
@@ -58,7 +58,7 @@ func (p RolloutPodRestarter) checkEnqueueRollout(roCtx *rolloutContext) {
 // spec.restartAt. If not, iterates pods and deletes pods which do not have a deletion timestamp,
 // and were created before spec.restartedAt. If the rollout is a canary rollout, it can restart
 // multiple pods, up to maxUnavailable or 1, whichever is greater.
-func (p *RolloutPodRestarter) Reconcile(roCtx *rolloutContext) error {
+func (p *RolloutPodRestarter) Reconcile(roCtx *replicasetRolloutContext) error {
 	ctx := context.TODO()
 	logCtx := roCtx.log.WithField("Reconciler", "PodRestarter")
 	p.checkEnqueueRollout(roCtx)
@@ -176,7 +176,7 @@ func getAvailablePodCount(pods []*corev1.Pod, minReadySeconds int32) int32 {
 	return available
 }
 
-func NewSortReplicaSetsByPriority(roCtx *rolloutContext) SortReplicaSetsByPriority {
+func NewSortReplicaSetsByPriority(roCtx *replicasetRolloutContext) SortReplicaSetsByPriority {
 	newRSName := ""
 	if roCtx.newRS != nil {
 		newRSName = roCtx.newRS.Name

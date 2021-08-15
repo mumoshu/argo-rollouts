@@ -15,7 +15,7 @@ import (
 	rolloututil "github.com/argoproj/argo-rollouts/utils/rollout"
 )
 
-func (c *rolloutContext) rolloutCanary() error {
+func (c *replicasetRolloutContext) rolloutCanary() error {
 	var err error
 	if replicasetutil.PodTemplateOrStepsChanged(c.rollout, c.newRS) {
 		c.newRS, err = c.getAllReplicaSetsAndSyncRevision(false)
@@ -84,7 +84,7 @@ func (c *rolloutContext) rolloutCanary() error {
 	return c.syncRolloutStatusCanary()
 }
 
-func (c *rolloutContext) reconcileCanaryStableReplicaSet() (bool, error) {
+func (c *replicasetRolloutContext) reconcileCanaryStableReplicaSet() (bool, error) {
 	if !replicasetutil.CheckStableRSExists(c.newRS, c.stableRS) {
 		// we skip this because if they are equal, then it will get reconciled in reconcileNewReplicaSet()
 		// making this redundant
@@ -139,7 +139,7 @@ func (c *rolloutContext) reconcileCanaryPause() bool {
 }
 
 // scaleDownOldReplicaSetsForCanary scales down old replica sets when rollout strategy is "canary".
-func (c *rolloutContext) scaleDownOldReplicaSetsForCanary(oldRSs []*appsv1.ReplicaSet) (int32, error) {
+func (c *replicasetRolloutContext) scaleDownOldReplicaSetsForCanary(oldRSs []*appsv1.ReplicaSet) (int32, error) {
 	// Clean up unhealthy replicas first, otherwise unhealthy replicas will block rollout
 	// and cause timeout. See https://github.com/kubernetes/kubernetes/issues/16737
 	oldRSs, totalScaledDown, err := c.cleanupUnhealthyReplicas(oldRSs)
@@ -201,7 +201,7 @@ func (c *rolloutContext) scaleDownOldReplicaSetsForCanary(oldRSs []*appsv1.Repli
 	return totalScaledDown, nil
 }
 
-func (c *rolloutContext) completedCurrentCanaryStep() bool {
+func (c *replicasetRolloutContext) completedCurrentCanaryStep() bool {
 	if c.rollout.Spec.Paused {
 		return false
 	}
@@ -233,7 +233,7 @@ func (c *rolloutContext) completedCurrentCanaryStep() bool {
 	return false
 }
 
-func (c *rolloutContext) syncRolloutStatusCanary() error {
+func (c *replicasetRolloutContext) syncRolloutStatusCanary() error {
 	newStatus := c.calculateBaseStatus()
 	newStatus.AvailableReplicas = replicasetutil.GetAvailableReplicaCountForReplicaSets(c.allRSs)
 	newStatus.HPAReplicas = replicasetutil.GetActualReplicaCountForReplicaSets(c.allRSs)
@@ -300,7 +300,7 @@ func (c *rolloutContext) syncRolloutStatusCanary() error {
 	return c.persistRolloutStatus(&newStatus)
 }
 
-func (c *rolloutContext) reconcileCanaryReplicaSets() (bool, error) {
+func (c *replicasetRolloutContext) reconcileCanaryReplicaSets() (bool, error) {
 	err := c.removeScaleDownDeadlines()
 	if err != nil {
 		return false, err

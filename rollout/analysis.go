@@ -69,7 +69,7 @@ func (c *Controller) getAnalysisRunsForRollout(rollout *v1alpha1.Rollout) ([]*v1
 	return ownedByRollout, nil
 }
 
-func (c *rolloutContext) reconcileAnalysisRuns() error {
+func (c *replicasetRolloutContext) reconcileAnalysisRuns() error {
 	isAborted := c.pauseContext.IsAborted()
 	rollbackToScaleDownDelay := replicasetutil.HasScaleDownDeadline(c.newRS)
 	initialDeploy := c.rollout.Status.StableRS == ""
@@ -221,7 +221,7 @@ func (c *rolloutContext) reconcileAnalysisRunStatusChanges(currARs analysisutil.
 	)
 }
 
-func (c *rolloutContext) reconcilePrePromotionAnalysisRun() (*v1alpha1.AnalysisRun, error) {
+func (c *replicasetRolloutContext) reconcilePrePromotionAnalysisRun() (*v1alpha1.AnalysisRun, error) {
 	currentAr := c.currentArs.BlueGreenPrePromotion
 	if c.rollout.Spec.Strategy.BlueGreen.PrePromotionAnalysis == nil {
 		err := c.cancelAnalysisRuns([]*v1alpha1.AnalysisRun{currentAr})
@@ -279,7 +279,7 @@ func skipPostPromotionAnalysisRun(rollout *v1alpha1.Rollout, newRS *appsv1.Repli
 	return rollout.Status.StableRS == currentPodHash || activeSelector != currentPodHash || currentPodHash == "" || !annotations.IsSaturated(rollout, newRS)
 }
 
-func (c *rolloutContext) reconcilePostPromotionAnalysisRun() (*v1alpha1.AnalysisRun, error) {
+func (c *replicasetRolloutContext) reconcilePostPromotionAnalysisRun() (*v1alpha1.AnalysisRun, error) {
 	currentAr := c.currentArs.BlueGreenPostPromotion
 	if c.rollout.Spec.Strategy.BlueGreen.PostPromotionAnalysis == nil {
 		err := c.cancelAnalysisRuns([]*v1alpha1.AnalysisRun{currentAr})
@@ -309,7 +309,7 @@ func (c *rolloutContext) reconcilePostPromotionAnalysisRun() (*v1alpha1.Analysis
 	return currentAr, nil
 }
 
-func (c *rolloutContext) reconcileBackgroundAnalysisRun() (*v1alpha1.AnalysisRun, error) {
+func (c *replicasetRolloutContext) reconcileBackgroundAnalysisRun() (*v1alpha1.AnalysisRun, error) {
 	currentAr := c.currentArs.CanaryBackground
 	if c.rollout.Spec.Strategy.Canary.Analysis == nil {
 		err := c.cancelAnalysisRuns([]*v1alpha1.AnalysisRun{currentAr})
@@ -344,7 +344,7 @@ func (c *rolloutContext) reconcileBackgroundAnalysisRun() (*v1alpha1.AnalysisRun
 	return currentAr, nil
 }
 
-func (c *rolloutContext) createAnalysisRun(rolloutAnalysis *v1alpha1.RolloutAnalysis, infix string, labels map[string]string) (*v1alpha1.AnalysisRun, error) {
+func (c *replicasetRolloutContext) createAnalysisRun(rolloutAnalysis *v1alpha1.RolloutAnalysis, infix string, labels map[string]string) (*v1alpha1.AnalysisRun, error) {
 	args := analysisutil.BuildArgumentsForRolloutAnalysisRun(rolloutAnalysis.Args, c.stableRS, c.newRS, c.rollout)
 	podHash := replicasetutil.GetPodTemplateHash(c.newRS)
 	if podHash == "" {
@@ -358,7 +358,7 @@ func (c *rolloutContext) createAnalysisRun(rolloutAnalysis *v1alpha1.RolloutAnal
 	return analysisutil.CreateWithCollisionCounter(c.log, analysisRunIf, *ar)
 }
 
-func (c *rolloutContext) reconcileStepBasedAnalysisRun() (*v1alpha1.AnalysisRun, error) {
+func (c *replicasetRolloutContext) reconcileStepBasedAnalysisRun() (*v1alpha1.AnalysisRun, error) {
 	step, index := replicasetutil.GetCurrentCanaryStep(c.rollout)
 	currentAr := c.currentArs.CanaryStep
 

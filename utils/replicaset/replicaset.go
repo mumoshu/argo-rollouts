@@ -428,9 +428,9 @@ func MaxSurge(rollout *v1alpha1.Rollout) int32 {
 	return maxSurge
 }
 
-// checkStepHashChange indicates if the rollout's step for the strategy have changed. This causes the rollout to reset the
+// CheckStepHashChange indicates if the rollout's step for the strategy have changed. This causes the rollout to reset the
 // currentStepIndex to zero. If there was no previously recorded step hash to compare to the function defaults to true
-func checkStepHashChange(rollout *v1alpha1.Rollout) bool {
+func CheckStepHashChange(rollout *v1alpha1.Rollout) bool {
 	if rollout.Status.CurrentStepHash == "" {
 		return true
 	}
@@ -464,7 +464,7 @@ func CheckPodSpecChange(rollout *v1alpha1.Rollout, newRS *appsv1.ReplicaSet) boo
 
 // PodTemplateOrStepsChanged detects if there is a change in either the pod template, or canary steps
 func PodTemplateOrStepsChanged(rollout *v1alpha1.Rollout, newRS *appsv1.ReplicaSet) bool {
-	if checkStepHashChange(rollout) {
+	if CheckStepHashChange(rollout) {
 		return true
 	}
 	if CheckPodSpecChange(rollout, newRS) {

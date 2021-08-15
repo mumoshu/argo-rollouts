@@ -367,6 +367,25 @@ func (c *Controller) syncHandler(key string) error {
 		logCtx.WithField("time_ms", duration.Seconds()*1e3).Info("Reconciliation completed")
 	}()
 
+	if canary := r.Spec.Strategy.Canary; canary != nil && canary.TrafficRouting != nil && canary.TrafficRouting.WorkloadBalancer != nil {
+		roCtx, err := c.newRolloutContext2(r)
+		if err != nil {
+			return err
+		}
+
+		wc := &workloadRolloutContext{
+			rolloutContext: *roCtx,
+		}
+		newRollout, err := wc.reconcileRollout(r)
+		if newRollout != nil {
+			c.writeBackToInformer(newRollout)
+		}
+		if err != nil {
+			logCtx.Errorf("roCtx.reconcile err %v", err)
+		}
+		return err
+	}
+
 	resolveErr := c.refResolver.Resolve(r)
 	roCtx, err := c.newRolloutContext(r)
 	if err != nil {
@@ -416,7 +435,7 @@ func (c *Controller) writeBackToInformer(ro *v1alpha1.Rollout) {
 	logCtx.Info("persisted to informer")
 }
 
-func (c *Controller) newRolloutContext(rollout *v1alpha1.Rollout) (*rolloutContext, error) {
+func (c *Controller) newRolloutContext(rollout *v1alpha1.Rollout) (*replicasetRolloutContext, error) {
 	rsList, err := c.getReplicaSetsForRollouts(rollout)
 	if err != nil {
 		return nil, err
@@ -427,6 +446,24 @@ func (c *Controller) newRolloutContext(rollout *v1alpha1.Rollout) (*rolloutConte
 	stableRS := replicasetutil.GetStableRS(rollout, newRS, olderRSs)
 	otherRSs := replicasetutil.GetOtherRSs(rollout, newRS, stableRS, rsList)
 
+	roCtx, err := c.newRolloutContext2(rollout)
+	if err != nil {
+		return nil, err
+	}
+
+	rroCtx := replicasetRolloutContext{
+		rolloutContext: *roCtx,
+
+		newRS:    newRS,
+		stableRS: stableRS,
+		olderRSs: olderRSs,
+		otherRSs: otherRSs,
+		allRSs:   rsList,
+	}
+	return &rroCtx, nil
+}
+
+func (c *Controller) newRolloutContext2(rollout *v1alpha1.Rollout) (*rolloutContext, error) {
 	exList, err := c.getExperimentsForRollout(rollout)
 	if err != nil {
 		return nil, err
@@ -444,11 +481,6 @@ func (c *Controller) newRolloutContext(rollout *v1alpha1.Rollout) (*rolloutConte
 	roCtx := rolloutContext{
 		rollout:    rollout,
 		log:        logCtx,
-		newRS:      newRS,
-		stableRS:   stableRS,
-		olderRSs:   olderRSs,
-		otherRSs:   otherRSs,
-		allRSs:     rsList,
 		currentArs: currentArs,
 		otherArs:   otherArs,
 		currentEx:  currentEx,
@@ -462,6 +494,7 @@ func (c *Controller) newRolloutContext(rollout *v1alpha1.Rollout) (*rolloutConte
 		},
 		reconcilerBase: c.reconcilerBase,
 	}
+
 	return &roCtx, nil
 }
 

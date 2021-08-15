@@ -12,8 +12,17 @@ import (
 	"k8s.io/kubernetes/pkg/fieldpath"
 )
 
-// BuildArgumentsForRolloutAnalysisRun builds the arguments for a analysis base created by a rollout
 func BuildArgumentsForRolloutAnalysisRun(args []v1alpha1.AnalysisRunArgument, stableRS, newRS *appsv1.ReplicaSet, r *v1alpha1.Rollout) []v1alpha1.Argument {
+	return BuildArgumentsForRolloutAnalysisRun2(
+		args,
+		stableRS.Labels[v1alpha1.DefaultRolloutUniqueLabelKey],
+		newRS.Labels[v1alpha1.DefaultRolloutUniqueLabelKey],
+		r,
+	)
+}
+
+// BuildArgumentsForRolloutAnalysisRun builds the arguments for a analysis base created by a rollout
+func BuildArgumentsForRolloutAnalysisRun2(args []v1alpha1.AnalysisRunArgument, stableHash, newHash string, r *v1alpha1.Rollout) []v1alpha1.Argument {
 	arguments := []v1alpha1.Argument{}
 	for i := range args {
 		arg := args[i]
@@ -22,9 +31,9 @@ func BuildArgumentsForRolloutAnalysisRun(args []v1alpha1.AnalysisRunArgument, st
 			if arg.ValueFrom.PodTemplateHashValue != nil {
 				switch *arg.ValueFrom.PodTemplateHashValue {
 				case v1alpha1.Latest:
-					value = newRS.Labels[v1alpha1.DefaultRolloutUniqueLabelKey]
+					value = newHash
 				case v1alpha1.Stable:
-					value = stableRS.Labels[v1alpha1.DefaultRolloutUniqueLabelKey]
+					value = stableHash
 				}
 			} else {
 				if arg.ValueFrom.FieldRef != nil {

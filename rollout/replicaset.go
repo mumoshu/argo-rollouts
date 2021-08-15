@@ -92,7 +92,7 @@ func (c *Controller) getReplicaSetsForRollouts(r *v1alpha1.Rollout) ([]*appsv1.R
 
 // removeScaleDownDeadlines removes the scale-down-deadline annotation from the new/stable ReplicaSets,
 // in the event that we moved back to an older revision that is still within its scaleDownDelay.
-func (c *rolloutContext) removeScaleDownDeadlines() error {
+func (c *replicasetRolloutContext) removeScaleDownDeadlines() error {
 	var toRemove []*appsv1.ReplicaSet
 	if c.newRS != nil && !c.shouldDelayScaleDownOnAbort() {
 		toRemove = append(toRemove, c.newRS)
@@ -111,7 +111,7 @@ func (c *rolloutContext) removeScaleDownDeadlines() error {
 	return nil
 }
 
-func (c *rolloutContext) reconcileNewReplicaSet() (bool, error) {
+func (c *replicasetRolloutContext) reconcileNewReplicaSet() (bool, error) {
 	if c.newRS == nil {
 		return false, nil
 	}
@@ -164,7 +164,7 @@ func (c *rolloutContext) shouldDelayScaleDownOnAbort() bool {
 
 // reconcileOtherReplicaSets reconciles "other" ReplicaSets.
 // Other ReplicaSets are ReplicaSets are neither the new or stable (allRSs - newRS - stableRS)
-func (c *rolloutContext) reconcileOtherReplicaSets() (bool, error) {
+func (c *replicasetRolloutContext) reconcileOtherReplicaSets() (bool, error) {
 	otherRSs := controller.FilterActiveReplicaSets(c.otherRSs)
 	oldPodsCount := replicasetutil.GetReplicaCountForReplicaSets(otherRSs)
 	if oldPodsCount == 0 {

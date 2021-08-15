@@ -48,6 +48,14 @@ func (c *FakeArgoprojV1alpha1) Rollouts(namespace string) v1alpha1.RolloutInterf
 	return &FakeRollouts{c, namespace}
 }
 
+func (c *FakeArgoprojV1alpha1) Workloads(namespace string) v1alpha1.WorkloadInterface {
+	return &FakeWorkloads{c, namespace}
+}
+
+func (c *FakeArgoprojV1alpha1) WorkloadBalancers(namespace string) v1alpha1.WorkloadBalancerInterface {
+	return &FakeWorkloadBalancers{c, namespace}
+}
+
 // RESTClient returns a RESTClient that is used to communicate
 // with API server by this client implementation.
 func (c *FakeArgoprojV1alpha1) RESTClient() rest.Interface {

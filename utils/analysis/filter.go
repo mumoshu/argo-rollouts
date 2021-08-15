@@ -89,14 +89,14 @@ func FilterAnalysisRuns(ars []*v1alpha1.AnalysisRun, cond func(ar *v1alpha1.Anal
 }
 
 // SortAnalysisRunByPodHash returns map with a podHash as a key and an array of analysisRuns with that pod hash
-func SortAnalysisRunByPodHash(ars []*v1alpha1.AnalysisRun) map[string][]*v1alpha1.AnalysisRun {
+func SortAnalysisRunByPodHash(ars []*v1alpha1.AnalysisRun, key string) map[string][]*v1alpha1.AnalysisRun {
 	podHashToAr := map[string][]*v1alpha1.AnalysisRun{}
 	if ars == nil {
 		return podHashToAr
 	}
 	for i := range ars {
 		ar := ars[i]
-		podHash, ok := ar.Labels[v1alpha1.DefaultRolloutUniqueLabelKey]
+		podHash, ok := ar.Labels[key]
 		if !ok {
 			continue
 		}

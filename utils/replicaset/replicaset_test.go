@@ -646,12 +646,12 @@ func TestCheckPodSpecChange(t *testing.T) {
 func TestCheckStepHashChange(t *testing.T) {
 	ro := generateRollout("nginx")
 	ro.Spec.Strategy.Canary = &v1alpha1.CanaryStrategy{}
-	assert.True(t, checkStepHashChange(&ro))
+	assert.True(t, CheckStepHashChange(&ro))
 	ro.Status.CurrentStepHash = conditions.ComputeStepHash(&ro)
-	assert.False(t, checkStepHashChange(&ro))
+	assert.False(t, CheckStepHashChange(&ro))
 
 	ro.Status.CurrentStepHash = "different-hash"
-	assert.True(t, checkStepHashChange(&ro))
+	assert.True(t, CheckStepHashChange(&ro))
 }
 
 func TestResetCurrentStepIndex(t *testing.T) {

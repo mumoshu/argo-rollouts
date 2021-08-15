@@ -40,7 +40,7 @@ import (
 //
 // Note that currently the rollout controller is using caches to avoid querying the server for reads.
 // This may lead to stale reads of replica sets, thus incorrect  v status.
-func (c *rolloutContext) getAllReplicaSetsAndSyncRevision(createIfNotExisted bool) (*appsv1.ReplicaSet, error) {
+func (c *replicasetRolloutContext) getAllReplicaSetsAndSyncRevision(createIfNotExisted bool) (*appsv1.ReplicaSet, error) {
 	// Get new replica set with the updated revision number
 	newRS, err := c.syncReplicaSetRevision()
 	if err != nil {
@@ -58,7 +58,7 @@ func (c *rolloutContext) getAllReplicaSetsAndSyncRevision(createIfNotExisted boo
 // Returns a replica set that matches the intent of the given rollout. Returns nil if the new replica set doesn't exist yet.
 // 1. Get existing new RS (the RS that the given rollout targets, whose pod template is the same as rollout's).
 // 2. If there's existing new RS, update its revision number if it's smaller than (maxOldRevision + 1), where maxOldRevision is the max revision number among all old RSes.
-func (c *rolloutContext) syncReplicaSetRevision() (*appsv1.ReplicaSet, error) {
+func (c *replicasetRolloutContext) syncReplicaSetRevision() (*appsv1.ReplicaSet, error) {
 	if c.newRS == nil {
 		return nil, nil
 	}
@@ -128,7 +128,7 @@ func (c *rolloutContext) setRolloutRevision(revision string) error {
 	return nil
 }
 
-func (c *rolloutContext) createDesiredReplicaSet() (*appsv1.ReplicaSet, error) {
+func (c *replicasetRolloutContext) createDesiredReplicaSet() (*appsv1.ReplicaSet, error) {
 	ctx := context.TODO()
 	// Calculate the max revision number among all old RSes
 	maxOldRevision := replicasetutil.MaxRevision(c.olderRSs)
@@ -266,7 +266,7 @@ func (c *rolloutContext) createDesiredReplicaSet() (*appsv1.ReplicaSet, error) {
 }
 
 // syncReplicasOnly is responsible for reconciling rollouts on scaling events.
-func (c *rolloutContext) syncReplicasOnly(isScaling bool) error {
+func (c *replicasetRolloutContext) syncReplicasOnly(isScaling bool) error {
 	c.log.Infof("Syncing replicas only (userPaused %v, isScaling: %v)", c.rollout.Spec.Paused, isScaling)
 	_, err := c.getAllReplicaSetsAndSyncRevision(false)
 	if err != nil {
@@ -335,7 +335,7 @@ func (c *rolloutContext) syncReplicasOnly(isScaling bool) error {
 // by looking at the desired-replicas annotation in the active replica sets of the rollout.
 //
 // rsList should come from getReplicaSetsForRollout(r).
-func (c *rolloutContext) isScalingEvent() (bool, error) {
+func (c *replicasetRolloutContext) isScalingEvent() (bool, error) {
 	_, err := c.getAllReplicaSetsAndSyncRevision(false)
 	if err != nil {
 		return false, err
@@ -396,7 +396,7 @@ func (c *rolloutContext) scaleReplicaSet(rs *appsv1.ReplicaSet, newScale int32, 
 }
 
 // calculateStatus calculates the common fields for all rollouts by looking into the provided replica sets.
-func (c *rolloutContext) calculateBaseStatus() v1alpha1.RolloutStatus {
+func (c *replicasetRolloutContext) calculateBaseStatus() v1alpha1.RolloutStatus {
 	prevStatus := c.rollout.Status
 
 	prevCond := conditions.GetRolloutCondition(prevStatus, v1alpha1.InvalidSpec)
@@ -431,7 +431,7 @@ func (c *rolloutContext) calculateBaseStatus() v1alpha1.RolloutStatus {
 // reconcileRevisionHistoryLimit is responsible for cleaning up a rollout ie. retains all but the latest N old replica sets
 // where N=r.Spec.RevisionHistoryLimit. Old replica sets are older versions of the podtemplate of a rollout kept
 // around by default 1) for historical reasons.
-func (c *rolloutContext) reconcileRevisionHistoryLimit(oldRSs []*appsv1.ReplicaSet) error {
+func (c *replicasetRolloutContext) reconcileRevisionHistoryLimit(oldRSs []*appsv1.ReplicaSet) error {
 	ctx := context.TODO()
 	revHistoryLimit := defaults.GetRevisionHistoryLimitOrDefault(c.rollout)
 
@@ -448,8 +448,8 @@ func (c *rolloutContext) reconcileRevisionHistoryLimit(oldRSs []*appsv1.ReplicaS
 	c.log.Infof("Cleaning up %d old replicasets from revision history limit %d", len(cleanableRSes), revHistoryLimit)
 
 	sort.Sort(controller.ReplicaSetsByCreationTimestamp(cleanableRSes))
-	podHashToArList := analysisutil.SortAnalysisRunByPodHash(c.otherArs)
-	podHashToExList := experimentutil.SortExperimentsByPodHash(c.otherExs)
+	podHashToArList := analysisutil.SortAnalysisRunByPodHash(c.otherArs, v1alpha1.DefaultRolloutUniqueLabelKey)
+	podHashToExList := experimentutil.SortExperimentsByPodHash(c.otherExs, v1alpha1.DefaultRolloutUniqueLabelKey)
 	c.log.Info("Looking to cleanup old replica sets")
 	for i := int32(0); i < diff; i++ {
 		rs := cleanableRSes[i]
@@ -573,7 +573,7 @@ func isIndefiniteStep(r *v1alpha1.Rollout) bool {
 	return false
 }
 
-func (c *rolloutContext) calculateRolloutConditions(newStatus v1alpha1.RolloutStatus) v1alpha1.RolloutStatus {
+func (c *replicasetRolloutContext) calculateRolloutConditions(newStatus v1alpha1.RolloutStatus) v1alpha1.RolloutStatus {
 	isPaused := len(c.rollout.Status.PauseConditions) > 0 || c.rollout.Spec.Paused
 	isAborted := c.pauseContext.IsAborted()
 
@@ -840,7 +840,7 @@ func (c *rolloutContext) resetRolloutStatus(newStatus *v1alpha1.RolloutStatus) {
 
 // shouldFullPromote returns a reason string explaining why a rollout should fully promote, marking
 // the desired ReplicaSet as stable. Returns empty string if the rollout is in middle of update
-func (c *rolloutContext) shouldFullPromote(newStatus v1alpha1.RolloutStatus) string {
+func (c *replicasetRolloutContext) shouldFullPromote(newStatus v1alpha1.RolloutStatus) string {
 	// NOTE: the order of these checks are significant
 	if c.stableRS == nil {
 		return "Initial deploy"
@@ -896,7 +896,7 @@ func (c *rolloutContext) shouldFullPromote(newStatus v1alpha1.RolloutStatus) str
 
 // promoteStable will take appropriate action once we have promoted the current ReplicaSet as stable
 // e.g. reset status conditions, emit Kubernetes events, start scaleDownDelay, etc...
-func (c *rolloutContext) promoteStable(newStatus *v1alpha1.RolloutStatus, reason string) error {
+func (c *replicasetRolloutContext) promoteStable(newStatus *v1alpha1.RolloutStatus, reason string) error {
 	c.pauseContext.ClearPauseConditions()
 	c.pauseContext.RemoveAbort()
 	newStatus.PromoteFull = false

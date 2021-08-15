@@ -183,6 +183,77 @@ func SetNewReplicaSetAnnotations(rollout *v1alpha1.Rollout, newRS *appsv1.Replic
 	return annotationChanged
 }
 
+// SetNewWorkloadAnnotations sets new workload's annotations appropriately by updating its revision and
+// copying required rollout annotations to it; it returns true if workload's annotation is changed.
+func SetNewWorkloadAnnotations(rollout *v1alpha1.Rollout, newWorkload *v1alpha1.Workload, newRevision string, exists bool) bool {
+	logCtx := logutil.WithRollout(rollout)
+	// First, copy rollout's annotations (except for apply and revision annotations)
+	annotationChanged := copyRolloutAnnotationsToWorkload(rollout, newWorkload)
+	// Then, update replica set's revision annotation
+	if newWorkload.Annotations == nil {
+		newWorkload.Annotations = make(map[string]string)
+	}
+	oldRevision, ok := newWorkload.Annotations[RevisionAnnotation]
+	// The newRS's revision should be the greatest among all RSes. Usually, its revision number is newRevision (the max revision number
+	// of all old RSes + 1). However, it's possible that some of the old RSes are deleted after the newRS revision being updated, and
+	// newRevision becomes smaller than newRS's revision. We should only update newRS revision when it's smaller than newRevision.
+
+	oldRevisionInt, err := strconv.ParseInt(oldRevision, 10, 64)
+	if err != nil {
+		if oldRevision != "" {
+			logCtx.Warnf("Updating workload '%s' revision: OldRevision not int '%s'", newWorkload.Name, err)
+			return false
+		}
+		//If the RS annotation is empty then initialise it to 0
+		oldRevisionInt = 0
+	}
+	newRevisionInt, err := strconv.ParseInt(newRevision, 10, 64)
+	if err != nil {
+		logCtx.Warnf("Updating workload '%s' revision: NewRevision not int %s", newWorkload.Name, err)
+		return false
+	}
+	if oldRevisionInt < newRevisionInt {
+		newWorkload.Annotations[RevisionAnnotation] = newRevision
+		annotationChanged = true
+		logCtx.Infof("Updating replica set '%s' revision from %d to %d", newWorkload.Name, oldRevisionInt, newRevisionInt)
+	}
+	// If a revision annotation already existed and this replica set was updated with a new revision
+	// then that means we are rolling back to this replica set. We need to preserve the old revisions
+	// for historical information.
+	if ok && annotationChanged {
+		revisionHistoryAnnotation := newWorkload.Annotations[RevisionHistoryAnnotation]
+		oldRevisions := strings.Split(revisionHistoryAnnotation, ",")
+		if len(oldRevisions[0]) == 0 {
+			newWorkload.Annotations[RevisionHistoryAnnotation] = oldRevision
+		} else {
+			oldRevisions = append(oldRevisions, oldRevision)
+			newWorkload.Annotations[RevisionHistoryAnnotation] = strings.Join(oldRevisions, ",")
+		}
+	}
+	return annotationChanged
+}
+
+// copyRolloutAnnotationsToWorkload copies rollout's annotations to workload's annotations,
+// and returns true if workload's annotation is changed.
+// Note that apply and revision annotations are not copied.
+func copyRolloutAnnotationsToWorkload(rollouts *v1alpha1.Rollout, wl *v1alpha1.Workload) bool {
+	rsAnnotationsChanged := false
+	if wl.Annotations == nil {
+		wl.Annotations = make(map[string]string)
+	}
+	for k, v := range rollouts.Annotations {
+		// newRS revision is updated automatically in getNewReplicaSet, and the rollout's revision number is then updated
+		// by copying its newRS revision number. We should not copy rollout's revision to its newRS, since the update of
+		// rollout revision number may fail (revision becomes stale) and the revision number in newRS is more reliable.
+		if skipCopyAnnotation(k) || wl.Annotations[k] == v {
+			continue
+		}
+		wl.Annotations[k] = v
+		rsAnnotationsChanged = true
+	}
+	return rsAnnotationsChanged
+}
+
 var annotationsToSkip = map[string]bool{
 	corev1.LastAppliedConfigAnnotation: true,
 	RevisionAnnotation:                 true,

@@ -34,6 +34,10 @@ type Interface interface {
 	Experiments() ExperimentInformer
 	// Rollouts returns a RolloutInformer.
 	Rollouts() RolloutInformer
+	// Workloads returns a WorkloadInformer.
+	Workloads() WorkloadInformer
+	// WorkloadBalancers returns a WorkloadBalancerInformer.
+	WorkloadBalancers() WorkloadBalancerInformer
 }
 
 type version struct {
@@ -70,4 +74,14 @@ func (v *version) Experiments() ExperimentInformer {
 // Rollouts returns a RolloutInformer.
 func (v *version) Rollouts() RolloutInformer {
 	return &rolloutInformer{factory: v.factory, namespace: v.namespace, tweakListOptions: v.tweakListOptions}
+}
+
+// Workloads returns a WorkloadInformer.
+func (v *version) Workloads() WorkloadInformer {
+	return &workloadInformer{factory: v.factory, namespace: v.namespace, tweakListOptions: v.tweakListOptions}
+}
+
+// WorkloadBalancers returns a WorkloadBalancerInformer.
+func (v *version) WorkloadBalancers() WorkloadBalancerInformer {
+	return &workloadBalancerInformer{factory: v.factory, namespace: v.namespace, tweakListOptions: v.tweakListOptions}
 }
