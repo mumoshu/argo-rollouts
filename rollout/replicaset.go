@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"time"
 
+	experimentutil "github.com/argoproj/argo-rollouts/utils/experiment"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -825,4 +826,60 @@ func (c *replicasetDeployer) reconcileCanaryStableReplicaSet() (bool, error) {
 	_, stableRSReplicaCount := replicasetutil.CalculateReplicaCountsForCanary(c.rollout(), c.newRS(), c.stableRS(), c.otherRSs())
 	scaled, _, err := c.ScaleReplicaSetAndRecordEvent(c.stableRS(), stableRSReplicaCount)
 	return scaled, err
+}
+
+// ReconcileRevisionHistoryLimit is responsible for cleaning up a rollout ie. retains all but the latest N old replica sets
+// where N=r.Spec.RevisionHistoryLimit. Old replica sets are older versions of the podtemplate of a rollout kept
+// around by default 1) for historical reasons.
+func (c *replicasetDeployer) ReconcileRevisionHistoryLimit() error {
+	ctx := context.TODO()
+	revHistoryLimit := defaults.GetRevisionHistoryLimitOrDefault(c.rollout())
+
+	// Avoid deleting replica set with deletion timestamp set
+	aliveFilter := func(rs *appsv1.ReplicaSet) bool {
+		return rs != nil && rs.ObjectMeta.DeletionTimestamp == nil
+	}
+	cleanableRSes := controller.FilterReplicaSets(c.otherRSs(), aliveFilter)
+
+	diff := int32(len(cleanableRSes)) - revHistoryLimit
+	if diff <= 0 {
+		return nil
+	}
+	c.log.Infof("Cleaning up %d old replicasets from revision history limit %d", len(cleanableRSes), revHistoryLimit)
+
+	sort.Sort(controller.ReplicaSetsByCreationTimestamp(cleanableRSes))
+	podHashToArList := analysisutil.SortAnalysisRunByPodHash(c.GetOtherARs())
+	podHashToExList := experimentutil.SortExperimentsByPodHash(c.GetOtherExs())
+	c.log.Info("Looking to cleanup old replica sets")
+	for i := int32(0); i < diff; i++ {
+		rs := cleanableRSes[i]
+		// Avoid delete replica set with non-zero replica counts
+		if rs.Status.Replicas != 0 || *(rs.Spec.Replicas) != 0 || rs.Generation > rs.Status.ObservedGeneration || rs.DeletionTimestamp != nil {
+			continue
+		}
+		c.log.Infof("Trying to cleanup replica set %q", rs.Name)
+		if err := c.kubeclientset.AppsV1().ReplicaSets(rs.Namespace).Delete(ctx, rs.Name, metav1.DeleteOptions{}); err != nil && !errors.IsNotFound(err) {
+			// Return error instead of aggregating and continuing DELETEs on the theory
+			// that we may be overloading the api server.
+			return err
+		}
+		if podHash, ok := rs.Labels[v1alpha1.DefaultRolloutUniqueLabelKey]; ok {
+			if ars, ok := podHashToArList[podHash]; ok {
+				c.log.Infof("Cleaning up associated analysis runs with ReplicaSet '%s'", rs.Name)
+				err := c.deleteAnalysisRuns(ars)
+				if err != nil {
+					return err
+				}
+			}
+			if exs, ok := podHashToExList[podHash]; ok {
+				c.log.Infof("Cleaning up associated experiments with ReplicaSet '%s'", rs.Name)
+				err := c.deleteExperiments(exs)
+				if err != nil {
+					return err
+				}
+			}
+		}
+	}
+
+	return nil
 }
