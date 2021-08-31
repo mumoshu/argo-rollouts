@@ -884,3 +884,42 @@ func (c *replicasetDeployer) ReconcileRevisionHistoryLimit() error {
 
 	return nil
 }
+
+func (c *replicasetDeployer) ReconcileBlueGreen(activeSvc *corev1.Service) error {
+	err := c.RemoveScaleDownDeadlines()
+	if err != nil {
+		return err
+	}
+	err = c.reconcileBlueGreenStableReplicaSet(activeSvc)
+	if err != nil {
+		return err
+	}
+	_, err = c.ReconcileNewReplicaSet()
+	if err != nil {
+		return err
+	}
+	// Scale down old non-active, non-stable replicasets, if we can.
+	_, err = c.ReconcileOthersForBlueGreen()
+	if err != nil {
+		return err
+	}
+	if err := c.ReconcileRevisionHistoryLimit(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (c *replicasetDeployer) reconcileBlueGreenStableReplicaSet(activeSvc *corev1.Service) error {
+	if _, ok := activeSvc.Spec.Selector[v1alpha1.DefaultRolloutUniqueLabelKey]; !ok {
+		return nil
+	}
+	activeRS, _ := replicasetutil.GetReplicaSetByTemplateHash(c.allRSs, activeSvc.Spec.Selector[v1alpha1.DefaultRolloutUniqueLabelKey])
+	if activeRS == nil {
+		c.log.Warn("There shouldn't be a nil active replicaset if the active Service selector is set")
+		return nil
+	}
+
+	c.log.Infof("Reconciling stable ReplicaSet '%s'", activeRS.Name)
+	_, _, err := c.ScaleReplicaSetAndRecordEvent(activeRS, defaults.GetReplicasOrDefault(c.rollout().Spec.Replicas))
+	return err
+}
