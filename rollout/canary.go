@@ -64,7 +64,7 @@ func (c *rolloutContext) rolloutCanary() error {
 		return err
 	}
 
-	noScalingOccurred, err := c.reconcileCanaryReplicaSets()
+	noScalingOccurred, err := c.ReconcileCanary()
 	if err != nil {
 		return err
 	}
@@ -80,18 +80,6 @@ func (c *rolloutContext) rolloutCanary() error {
 	}
 
 	return c.syncRolloutStatusCanary()
-}
-
-func (c *rolloutContext) reconcileCanaryStableReplicaSet() (bool, error) {
-	if !replicasetutil.CheckStableRSExists(c.newRS, c.stableRS) {
-		// we skip this because if they are equal, then it will get reconciled in reconcileNewReplicaSet()
-		// making this redundant
-		c.log.Info("No StableRS exists to reconcile or matches newRS")
-		return false, nil
-	}
-	_, stableRSReplicaCount := replicasetutil.CalculateReplicaCountsForCanary(c.rollout, c.newRS, c.stableRS, c.otherRSs)
-	scaled, _, err := c.ScaleReplicaSetAndRecordEvent(c.stableRS, stableRSReplicaCount)
-	return scaled, err
 }
 
 func (c *rolloutContext) reconcileCanaryPause() bool {
@@ -233,38 +221,4 @@ func (c *rolloutContext) syncRolloutStatusCanary() error {
 	newStatus.CurrentStepIndex = currentStepIndex
 	newStatus = c.calculateRolloutConditions(newStatus)
 	return c.persistRolloutStatus(&newStatus)
-}
-
-func (c *rolloutContext) reconcileCanaryReplicaSets() (bool, error) {
-	err := c.RemoveScaleDownDeadlines()
-	if err != nil {
-		return false, err
-	}
-	scaledStableRS, err := c.reconcileCanaryStableReplicaSet()
-	if err != nil {
-		return false, err
-	}
-	if scaledStableRS {
-		c.log.Infof("Not finished reconciling stableRS")
-		return true, nil
-	}
-
-	scaledNewRS, err := c.ReconcileNewReplicaSet()
-	if err != nil {
-		return false, err
-	}
-	if scaledNewRS {
-		c.log.Infof("Not finished reconciling new ReplicaSet '%s'", c.newRS.Name)
-		return true, nil
-	}
-
-	scaledDown, err := c.ReconcileOthersForCanary()
-	if err != nil {
-		return false, err
-	}
-	if scaledDown {
-		c.log.Info("Not finished reconciling old ReplicaSets")
-		return true, nil
-	}
-	return false, nil
 }

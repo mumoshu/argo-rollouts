@@ -82,7 +82,7 @@ func (c *rolloutContext) syncReplicasOnly(isScaling bool) error {
 		}
 
 		if isScaling {
-			if _, err := c.reconcileCanaryReplicaSets(); err != nil {
+			if _, err := c.ReconcileCanary(); err != nil {
 				// If we get an error while trying to scale, the rollout will be requeued
 				// so we can abort this resync
 				return err

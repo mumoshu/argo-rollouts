@@ -486,6 +486,10 @@ func (c *rolloutContext) GetStableRS() *appsv1.ReplicaSet {
 	return c.stableRS
 }
 
+func (c *rolloutContext) GetOtherRSs() []*appsv1.ReplicaSet {
+	return c.otherRSs
+}
+
 func (c *rolloutContext) CheckTargetsVerified() (bool, error) {
 	stableSvc, err := c.servicesLister.Services(c.rollout.Namespace).Get(c.rollout.Spec.Strategy.Canary.StableService)
 	if err != nil {
@@ -511,7 +515,6 @@ func (c *rolloutContext) newDeployer() Deployer {
 		kubeclientset: c.kubeclientset,
 		log:           c.log,
 		allRSs:        c.allRSs,
-		otherRSs:      c.otherRSs,
 		olderRSs:      c.olderRSs,
 		recorder:      c.recorder,
 		pauseContext:  c.pauseContext,

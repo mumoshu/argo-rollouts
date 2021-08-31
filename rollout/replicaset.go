@@ -44,7 +44,8 @@ type Deployer interface {
 	GetAllReplicaSetsAndSyncRevision(createIfNotExisted bool) (*appsv1.ReplicaSet, error)
 
 	ReconcileOthersForBlueGreen() (bool, error)
-	ReconcileOthersForCanary() (bool, error)
+
+	ReconcileCanary() (bool, error)
 
 	GetStableHash() string
 	GetCanaryHash() string
@@ -57,6 +58,7 @@ type RolloutProvider interface {
 
 	GetNewRS() *appsv1.ReplicaSet
 	GetStableRS() *appsv1.ReplicaSet
+	GetOtherRSs() []*appsv1.ReplicaSet
 
 	GetCurrentARs() analysisutil.CurrentAnalysisRuns
 	CheckTargetsVerified() (bool, error)
@@ -66,7 +68,6 @@ type replicasetDeployer struct {
 	kubeclientset kubernetes.Interface
 	log           *log.Entry
 	allRSs        []*appsv1.ReplicaSet
-	otherRSs      []*appsv1.ReplicaSet
 	olderRSs      []*appsv1.ReplicaSet
 	recorder      record.EventRecorder
 	pauseContext  *pauseContext
@@ -225,7 +226,7 @@ func (d *replicasetDeployer) ReconcileOthersForBlueGreen() (bool, error) {
 	return d.reconcileOtherReplicaSets(d.scaleDownOldReplicaSetsForBlueGreen)
 }
 
-func (d *replicasetDeployer) ReconcileOthersForCanary() (bool, error) {
+func (d *replicasetDeployer) reconcileOthersForCanary() (bool, error) {
 	return d.reconcileOtherReplicaSets(d.scaleDownOldReplicaSetsForCanary)
 }
 
@@ -391,7 +392,7 @@ func (c *replicasetDeployer) canProceedWithScaleDownAnnotation(oldRSs []*appsv1.
 // reconcileOtherReplicaSets reconciles "other" ReplicaSets.
 // Other ReplicaSets are ReplicaSets are neither the new or stable (allRSs - newRS - stableRS)
 func (d *replicasetDeployer) reconcileOtherReplicaSets(scaleDownOldReplicaSets func([]*appsv1.ReplicaSet) (bool, error)) (bool, error) {
-	otherRSs := controller.FilterActiveReplicaSets(d.otherRSs)
+	otherRSs := controller.FilterActiveReplicaSets(d.otherRSs())
 	oldPodsCount := replicasetutil.GetReplicaCountForReplicaSets(otherRSs)
 	if oldPodsCount == 0 {
 		// Can't scale down further
@@ -557,6 +558,10 @@ func (d *replicasetDeployer) newRS() *appsv1.ReplicaSet {
 
 func (d *replicasetDeployer) stableRS() *appsv1.ReplicaSet {
 	return d.GetStableRS()
+}
+
+func (d *replicasetDeployer) otherRSs() []*appsv1.ReplicaSet {
+	return d.GetOtherRSs()
 }
 
 // Returns a replica set that matches the intent of the given rollout. Returns nil if the new replica set doesn't exist yet.
@@ -768,4 +773,50 @@ func (d *replicasetDeployer) GetCanaryHash() string {
 		canaryHash = d.newRS().Labels[v1alpha1.DefaultRolloutUniqueLabelKey]
 	}
 	return canaryHash
+}
+
+func (c *replicasetDeployer) ReconcileCanary() (bool, error) {
+	err := c.RemoveScaleDownDeadlines()
+	if err != nil {
+		return false, err
+	}
+	scaledStableRS, err := c.reconcileCanaryStableReplicaSet()
+	if err != nil {
+		return false, err
+	}
+	if scaledStableRS {
+		c.log.Infof("Not finished reconciling stableRS")
+		return true, nil
+	}
+
+	scaledNewRS, err := c.ReconcileNewReplicaSet()
+	if err != nil {
+		return false, err
+	}
+	if scaledNewRS {
+		c.log.Infof("Not finished reconciling new ReplicaSet '%s'", c.newRS().Name)
+		return true, nil
+	}
+
+	scaledDown, err := c.reconcileOthersForCanary()
+	if err != nil {
+		return false, err
+	}
+	if scaledDown {
+		c.log.Info("Not finished reconciling old ReplicaSets")
+		return true, nil
+	}
+	return false, nil
+}
+
+func (c *replicasetDeployer) reconcileCanaryStableReplicaSet() (bool, error) {
+	if !replicasetutil.CheckStableRSExists(c.newRS(), c.stableRS()) {
+		// we skip this because if they are equal, then it will get reconciled in reconcileNewReplicaSet()
+		// making this redundant
+		c.log.Info("No StableRS exists to reconcile or matches newRS")
+		return false, nil
+	}
+	_, stableRSReplicaCount := replicasetutil.CalculateReplicaCountsForCanary(c.rollout(), c.newRS(), c.stableRS(), c.otherRSs())
+	scaled, _, err := c.ScaleReplicaSetAndRecordEvent(c.stableRS(), stableRSReplicaCount)
+	return scaled, err
 }
