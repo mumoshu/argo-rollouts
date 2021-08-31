@@ -206,7 +206,8 @@ func TestReconcileRevisionHistoryLimit(t *testing.T) {
 			}
 			// This is the primary target of reconcileRevisionHistoryLimit
 			roCtx.otherRSs = test.replicaSets
-			err := roCtx.reconcileRevisionHistoryLimit()
+			roCtx.Deployer = roCtx.newDeployer()
+			err := roCtx.ReconcileRevisionHistoryLimit()
 			assert.Nil(t, err)
 			assert.Equal(t, len(test.expectedDeleted), len(k8sfake.Actions()))
 			for _, action := range k8sfake.Actions() {

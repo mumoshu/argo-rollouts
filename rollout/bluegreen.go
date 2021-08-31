@@ -105,7 +105,7 @@ func (c *rolloutContext) reconcileBlueGreenReplicaSets(activeSvc *corev1.Service
 	if err != nil {
 		return err
 	}
-	if err := c.reconcileRevisionHistoryLimit(); err != nil {
+	if err := c.ReconcileRevisionHistoryLimit(); err != nil {
 		return err
 	}
 	return nil

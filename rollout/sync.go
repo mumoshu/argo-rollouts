@@ -172,15 +172,15 @@ func (c *rolloutContext) calculateBaseStatus() v1alpha1.RolloutStatus {
 // reconcileRevisionHistoryLimit is responsible for cleaning up a rollout ie. retains all but the latest N old replica sets
 // where N=r.Spec.RevisionHistoryLimit. Old replica sets are older versions of the podtemplate of a rollout kept
 // around by default 1) for historical reasons.
-func (c *rolloutContext) reconcileRevisionHistoryLimit() error {
+func (c *replicasetDeployer) ReconcileRevisionHistoryLimit() error {
 	ctx := context.TODO()
-	revHistoryLimit := defaults.GetRevisionHistoryLimitOrDefault(c.rollout)
+	revHistoryLimit := defaults.GetRevisionHistoryLimitOrDefault(c.rollout())
 
 	// Avoid deleting replica set with deletion timestamp set
 	aliveFilter := func(rs *appsv1.ReplicaSet) bool {
 		return rs != nil && rs.ObjectMeta.DeletionTimestamp == nil
 	}
-	cleanableRSes := controller.FilterReplicaSets(c.otherRSs, aliveFilter)
+	cleanableRSes := controller.FilterReplicaSets(c.otherRSs(), aliveFilter)
 
 	diff := int32(len(cleanableRSes)) - revHistoryLimit
 	if diff <= 0 {
@@ -189,8 +189,8 @@ func (c *rolloutContext) reconcileRevisionHistoryLimit() error {
 	c.log.Infof("Cleaning up %d old replicasets from revision history limit %d", len(cleanableRSes), revHistoryLimit)
 
 	sort.Sort(controller.ReplicaSetsByCreationTimestamp(cleanableRSes))
-	podHashToArList := analysisutil.SortAnalysisRunByPodHash(c.otherArs)
-	podHashToExList := experimentutil.SortExperimentsByPodHash(c.otherExs)
+	podHashToArList := analysisutil.SortAnalysisRunByPodHash(c.GetOtherARs())
+	podHashToExList := experimentutil.SortExperimentsByPodHash(c.GetOtherExs())
 	c.log.Info("Looking to cleanup old replica sets")
 	for i := int32(0); i < diff; i++ {
 		rs := cleanableRSes[i]

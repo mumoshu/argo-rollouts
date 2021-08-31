@@ -510,6 +510,14 @@ func (c *rolloutContext) GetCurrentARs() analysisutil.CurrentAnalysisRuns {
 	return c.currentArs
 }
 
+func (c *rolloutContext) GetOtherARs() []*v1alpha1.AnalysisRun {
+	return c.otherArs
+}
+
+func (c *rolloutContext) GetOtherExs() []*v1alpha1.Experiment {
+	return c.otherExs
+}
+
 func (c *rolloutContext) newDeployer() Deployer {
 	deployer := &replicasetDeployer{
 		kubeclientset: c.kubeclientset,
@@ -529,6 +537,9 @@ func (c *rolloutContext) newDeployer() Deployer {
 		enqueueRolloutAfter: c.enqueueRolloutAfter,
 		setRolloutRevision:  c.setRolloutRevision,
 		patchCondition:      c.patchCondition,
+
+		deleteAnalysisRuns: c.deleteAnalysisRuns,
+		deleteExperiments:  c.deleteExperiments,
 	}
 
 	return deployer

@@ -38,7 +38,7 @@ func (c *rolloutContext) rolloutCanary() error {
 		return err
 	}
 
-	if err := c.reconcileRevisionHistoryLimit(); err != nil {
+	if err := c.ReconcileRevisionHistoryLimit(); err != nil {
 		return err
 	}
 

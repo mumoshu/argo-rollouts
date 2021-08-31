@@ -44,6 +44,7 @@ type Deployer interface {
 	GetAllReplicaSetsAndSyncRevision(createIfNotExisted bool) (*appsv1.ReplicaSet, error)
 
 	ReconcileOthersForBlueGreen() (bool, error)
+	ReconcileRevisionHistoryLimit() error
 
 	ReconcileCanary() (bool, error)
 
@@ -61,6 +62,8 @@ type RolloutProvider interface {
 	GetOtherRSs() []*appsv1.ReplicaSet
 
 	GetCurrentARs() analysisutil.CurrentAnalysisRuns
+	GetOtherARs() []*v1alpha1.AnalysisRun
+	GetOtherExs() []*v1alpha1.Experiment
 	CheckTargetsVerified() (bool, error)
 }
 
@@ -82,6 +85,9 @@ type replicasetDeployer struct {
 	enqueueRolloutAfter func(obj interface{}, duration time.Duration) //nolint:structcheck
 	setRolloutRevision  func(revision string) error
 	patchCondition      func(r *v1alpha1.Rollout, newStatus *v1alpha1.RolloutStatus, conditionList ...*v1alpha1.RolloutCondition) error
+
+	deleteAnalysisRuns func(ars []*v1alpha1.AnalysisRun) error
+	deleteExperiments  func(exs []*v1alpha1.Experiment) error
 }
 
 // removeScaleDownDelay removes the `scale-down-deadline` annotation from the ReplicaSet (if it exists)
