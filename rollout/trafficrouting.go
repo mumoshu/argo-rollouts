@@ -72,13 +72,11 @@ func (c *rolloutContext) reconcileTrafficRouting() error {
 	}
 	c.log.Infof("Reconciling TrafficRouting with type '%s'", reconciler.Type())
 
-	var canaryHash, stableHash string
-	if c.stableRS != nil {
-		stableHash = c.stableRS.Labels[v1alpha1.DefaultRolloutUniqueLabelKey]
-	}
-	if c.newRS != nil {
-		canaryHash = c.newRS.Labels[v1alpha1.DefaultRolloutUniqueLabelKey]
-	}
+	c.Deployer = c.newDeployer()
+
+	stableHash := c.GetStableHash()
+	canaryHash := c.GetCanaryHash()
+
 	err = reconciler.UpdateHash(canaryHash, stableHash)
 	if err != nil {
 		return err

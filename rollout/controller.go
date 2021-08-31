@@ -482,11 +482,14 @@ func (c *rolloutContext) GetNewRS() *appsv1.ReplicaSet {
 	return c.newRS
 }
 
+func (c *rolloutContext) GetStableRS() *appsv1.ReplicaSet {
+	return c.stableRS
+}
+
 func (c *rolloutContext) newDeployer() Deployer {
 	deployer := &replicasetDeployer{
 		kubeclientset: c.kubeclientset,
 		log:           c.log,
-		stableRS:      c.stableRS,
 		allRSs:        c.allRSs,
 		otherRSs:      c.otherRSs,
 		olderRSs:      c.olderRSs,

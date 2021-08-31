@@ -44,6 +44,9 @@ type Deployer interface {
 	ScaleReplicaSetAndRecordEvent(rs *appsv1.ReplicaSet, newScale int32) (bool, *appsv1.ReplicaSet, error)
 	ScaleDownDelayHelper(rs *appsv1.ReplicaSet, annotationedRSs int32, rolloutReplicas int32) (int32, int32, error)
 	GetAllReplicaSetsAndSyncRevision(createIfNotExisted bool) (*appsv1.ReplicaSet, error)
+
+	GetStableHash() string
+	GetCanaryHash() string
 }
 
 type RolloutProvider interface {
@@ -52,12 +55,12 @@ type RolloutProvider interface {
 	SetNewRollout(*v1alpha1.Rollout)
 
 	GetNewRS() *appsv1.ReplicaSet
+	GetStableRS() *appsv1.ReplicaSet
 }
 
 type replicasetDeployer struct {
 	kubeclientset kubernetes.Interface
 	log           *log.Entry
-	stableRS      *appsv1.ReplicaSet
 	allRSs        []*appsv1.ReplicaSet
 	otherRSs      []*appsv1.ReplicaSet
 	olderRSs      []*appsv1.ReplicaSet
@@ -149,9 +152,9 @@ func (d *replicasetDeployer) RemoveScaleDownDeadlines() error {
 	if d.newRS() != nil && !d.shouldDelayScaleDownOnAbort() {
 		toRemove = append(toRemove, d.newRS())
 	}
-	if d.stableRS != nil {
-		if len(toRemove) == 0 || d.stableRS.Name != d.newRS().Name {
-			toRemove = append(toRemove, d.stableRS)
+	if d.stableRS() != nil {
+		if len(toRemove) == 0 || d.stableRS().Name != d.newRS().Name {
+			toRemove = append(toRemove, d.stableRS())
 		}
 	}
 	for _, rs := range toRemove {
@@ -381,6 +384,10 @@ func (d *replicasetDeployer) newRS() *appsv1.ReplicaSet {
 	return d.GetNewRS()
 }
 
+func (d *replicasetDeployer) stableRS() *appsv1.ReplicaSet {
+	return d.GetStableRS()
+}
+
 // Returns a replica set that matches the intent of the given rollout. Returns nil if the new replica set doesn't exist yet.
 // 1. Get existing new RS (the RS that the given rollout targets, whose pod template is the same as rollout's).
 // 2. If there's existing new RS, update its revision number if it's smaller than (maxOldRevision + 1), where maxOldRevision is the max revision number among all old RSes.
@@ -474,7 +481,7 @@ func (c *replicasetDeployer) createDesiredReplicaSet() (*appsv1.ReplicaSet, erro
 
 	if c.rollout().Spec.Strategy.Canary != nil || c.rollout().Spec.Strategy.BlueGreen != nil {
 		var ephemeralMetadata *v1alpha1.PodTemplateMetadata
-		if c.stableRS != nil && c.stableRS != c.newRS() {
+		if c.stableRS() != nil && c.stableRS() != c.newRS() {
 			// If this is a canary rollout, with ephemeral *canary* metadata, and there is a stable RS,
 			// then inject the canary metadata so that all the RS's new pods get the canary labels/annotation
 			if c.rollout().Spec.Strategy.Canary != nil {
@@ -572,4 +579,22 @@ func (c *replicasetDeployer) createDesiredReplicaSet() (*appsv1.ReplicaSet, erro
 		c.log.Infof("Set rollout condition: %v", condition)
 	}
 	return createdRS, err
+}
+
+// canary
+
+func (d *replicasetDeployer) GetStableHash() string {
+	var stableHash string
+	if d.stableRS() != nil {
+		stableHash = d.stableRS().Labels[v1alpha1.DefaultRolloutUniqueLabelKey]
+	}
+	return stableHash
+}
+
+func (d *replicasetDeployer) GetCanaryHash() string {
+	var canaryHash string
+	if d.newRS() != nil {
+		canaryHash = d.newRS().Labels[v1alpha1.DefaultRolloutUniqueLabelKey]
+	}
+	return canaryHash
 }
