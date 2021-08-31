@@ -62,7 +62,7 @@ func (c *rolloutContext) syncReplicasOnly(isScaling bool) error {
 		if err != nil {
 			return err
 		}
-		if err := c.reconcileBlueGreenReplicaSets(activeSvc); err != nil {
+		if err := c.ReconcileBlueGreen(activeSvc); err != nil {
 			// If we get an error while trying to scale, the rollout will be requeued
 			// so we can abort this resync
 			return err

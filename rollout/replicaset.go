@@ -47,6 +47,7 @@ type Deployer interface {
 	ReconcileOthersForBlueGreen() (bool, error)
 	ReconcileRevisionHistoryLimit() error
 
+	ReconcileBlueGreen(activeSvc *corev1.Service) error
 	ReconcileCanary() (bool, error)
 
 	GetStableHash() string

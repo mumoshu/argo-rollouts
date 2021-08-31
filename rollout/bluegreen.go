@@ -42,7 +42,7 @@ func (c *rolloutContext) rolloutBlueGreen() error {
 		return err
 	}
 
-	err = c.reconcileBlueGreenReplicaSets(activeSvc)
+	err = c.ReconcileBlueGreen(activeSvc)
 	if err != nil {
 		return err
 	}
@@ -72,7 +72,7 @@ func (c *rolloutContext) rolloutBlueGreen() error {
 	return c.syncRolloutStatusBlueGreen(previewSvc, activeSvc)
 }
 
-func (c *rolloutContext) reconcileBlueGreenStableReplicaSet(activeSvc *corev1.Service) error {
+func (c *replicasetDeployer) reconcileBlueGreenStableReplicaSet(activeSvc *corev1.Service) error {
 	if _, ok := activeSvc.Spec.Selector[v1alpha1.DefaultRolloutUniqueLabelKey]; !ok {
 		return nil
 	}
@@ -83,11 +83,11 @@ func (c *rolloutContext) reconcileBlueGreenStableReplicaSet(activeSvc *corev1.Se
 	}
 
 	c.log.Infof("Reconciling stable ReplicaSet '%s'", activeRS.Name)
-	_, _, err := c.ScaleReplicaSetAndRecordEvent(activeRS, defaults.GetReplicasOrDefault(c.rollout.Spec.Replicas))
+	_, _, err := c.ScaleReplicaSetAndRecordEvent(activeRS, defaults.GetReplicasOrDefault(c.rollout().Spec.Replicas))
 	return err
 }
 
-func (c *rolloutContext) reconcileBlueGreenReplicaSets(activeSvc *corev1.Service) error {
+func (c *replicasetDeployer) ReconcileBlueGreen(activeSvc *corev1.Service) error {
 	err := c.RemoveScaleDownDeadlines()
 	if err != nil {
 		return err
