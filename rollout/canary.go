@@ -38,7 +38,7 @@ func (c *rolloutContext) rolloutCanary() error {
 		return err
 	}
 
-	if err := c.reconcileRevisionHistoryLimit(c.otherRSs); err != nil {
+	if err := c.reconcileRevisionHistoryLimit(); err != nil {
 		return err
 	}
 

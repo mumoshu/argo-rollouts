@@ -204,7 +204,9 @@ func TestReconcileRevisionHistoryLimit(t *testing.T) {
 					recorder:          record.NewFakeEventRecorder(),
 				},
 			}
-			err := roCtx.reconcileRevisionHistoryLimit(test.replicaSets)
+			// This is the primary target of reconcileRevisionHistoryLimit
+			roCtx.otherRSs = test.replicaSets
+			err := roCtx.reconcileRevisionHistoryLimit()
 			assert.Nil(t, err)
 			assert.Equal(t, len(test.expectedDeleted), len(k8sfake.Actions()))
 			for _, action := range k8sfake.Actions() {
