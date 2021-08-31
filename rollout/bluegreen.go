@@ -20,12 +20,13 @@ func (c *rolloutContext) rolloutBlueGreen() error {
 	if err != nil {
 		return err
 	}
-	c.newRS, err = c.getAllReplicaSetsAndSyncRevision(true)
+
+	c.Deployer = c.newDeployer()
+
+	c.newRS, err = c.GetAllReplicaSetsAndSyncRevision(true)
 	if err != nil {
 		return err
 	}
-
-	c.Deployer = c.newDeployer()
 
 	// This must happen right after the new replicaset is created
 	err = c.reconcilePreviewService(previewSvc)

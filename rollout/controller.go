@@ -466,19 +466,43 @@ func (c *Controller) newRolloutContext(rollout *v1alpha1.Rollout) (*rolloutConte
 	return &roCtx, nil
 }
 
+func (c *rolloutContext) SetRollout(r *v1alpha1.Rollout) {
+	c.rollout = r
+}
+
+func (c *rolloutContext) GetRollout() *v1alpha1.Rollout {
+	return c.rollout
+}
+
+func (c *rolloutContext) SetNewRollout(r *v1alpha1.Rollout) {
+	c.newRollout = r
+}
+
+func (c *rolloutContext) GetNewRS() *appsv1.ReplicaSet {
+	return c.newRS
+}
+
 func (c *rolloutContext) newDeployer() Deployer {
 	deployer := &replicasetDeployer{
-		kubeclientset:       c.kubeclientset,
-		log:                 c.log,
-		newRS:               c.newRS,
-		stableRS:            c.stableRS,
-		allRSs:              c.allRSs,
-		otherRSs:            c.otherRSs,
-		rollout:             c.rollout,
-		recorder:            c.recorder,
-		pauseContext:        c.pauseContext,
-		resyncPeriod:        c.resyncPeriod,
+		kubeclientset: c.kubeclientset,
+		log:           c.log,
+		stableRS:      c.stableRS,
+		allRSs:        c.allRSs,
+		otherRSs:      c.otherRSs,
+		olderRSs:      c.olderRSs,
+		recorder:      c.recorder,
+		pauseContext:  c.pauseContext,
+		resyncPeriod:  c.resyncPeriod,
+
+		RolloutProvider: c,
+
+		argoprojclientset: c.argoprojclientset,
+		refResolver:       c.refResolver,
+		replicaSetLister:  c.replicaSetLister,
+
 		enqueueRolloutAfter: c.enqueueRolloutAfter,
+		setRolloutRevision:  c.setRolloutRevision,
+		patchCondition:      c.patchCondition,
 	}
 
 	return deployer

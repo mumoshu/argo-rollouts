@@ -4,16 +4,23 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strconv"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	patchtypes "k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
+	appslisters "k8s.io/client-go/listers/apps/v1"
 	"k8s.io/kubernetes/pkg/controller"
+	labelsutil "k8s.io/kubernetes/pkg/util/labels"
+	"k8s.io/utils/pointer"
 
 	"github.com/argoproj/argo-rollouts/pkg/apis/rollouts/v1alpha1"
+	clientset "github.com/argoproj/argo-rollouts/pkg/client/clientset/versioned"
 	"github.com/argoproj/argo-rollouts/utils/annotations"
 	"github.com/argoproj/argo-rollouts/utils/conditions"
 	"github.com/argoproj/argo-rollouts/utils/defaults"
@@ -36,20 +43,37 @@ type Deployer interface {
 	CleanupUnhealthyReplicas(oldRSs []*appsv1.ReplicaSet) ([]*appsv1.ReplicaSet, int32, error)
 	ScaleReplicaSetAndRecordEvent(rs *appsv1.ReplicaSet, newScale int32) (bool, *appsv1.ReplicaSet, error)
 	ScaleDownDelayHelper(rs *appsv1.ReplicaSet, annotationedRSs int32, rolloutReplicas int32) (int32, int32, error)
+	GetAllReplicaSetsAndSyncRevision(createIfNotExisted bool) (*appsv1.ReplicaSet, error)
+}
+
+type RolloutProvider interface {
+	GetRollout() *v1alpha1.Rollout
+	SetRollout(*v1alpha1.Rollout)
+	SetNewRollout(*v1alpha1.Rollout)
+
+	GetNewRS() *appsv1.ReplicaSet
 }
 
 type replicasetDeployer struct {
-	kubeclientset   kubernetes.Interface
-	log             *log.Entry
-	newRS, stableRS *appsv1.ReplicaSet
-	allRSs          []*appsv1.ReplicaSet
-	otherRSs        []*appsv1.ReplicaSet
-	rollout         *v1alpha1.Rollout
-	recorder        record.EventRecorder
-	pauseContext    *pauseContext
-	resyncPeriod    time.Duration
+	kubeclientset kubernetes.Interface
+	log           *log.Entry
+	stableRS      *appsv1.ReplicaSet
+	allRSs        []*appsv1.ReplicaSet
+	otherRSs      []*appsv1.ReplicaSet
+	olderRSs      []*appsv1.ReplicaSet
+	recorder      record.EventRecorder
+	pauseContext  *pauseContext
+	resyncPeriod  time.Duration
+
+	RolloutProvider
+
+	argoprojclientset clientset.Interface
+	replicaSetLister  appslisters.ReplicaSetLister
+	refResolver       TemplateRefResolver
 
 	enqueueRolloutAfter func(obj interface{}, duration time.Duration) //nolint:structcheck
+	setRolloutRevision  func(revision string) error
+	patchCondition      func(r *v1alpha1.Rollout, newStatus *v1alpha1.RolloutStatus, conditionList ...*v1alpha1.RolloutCondition) error
 }
 
 // removeScaleDownDelay removes the `scale-down-deadline` annotation from the ReplicaSet (if it exists)
@@ -122,11 +146,11 @@ func (c *Controller) getReplicaSetsForRollouts(r *v1alpha1.Rollout) ([]*appsv1.R
 // in the event that we moved back to an older revision that is still within its scaleDownDelay.
 func (d *replicasetDeployer) RemoveScaleDownDeadlines() error {
 	var toRemove []*appsv1.ReplicaSet
-	if d.newRS != nil && !d.shouldDelayScaleDownOnAbort() {
-		toRemove = append(toRemove, d.newRS)
+	if d.newRS() != nil && !d.shouldDelayScaleDownOnAbort() {
+		toRemove = append(toRemove, d.newRS())
 	}
 	if d.stableRS != nil {
-		if len(toRemove) == 0 || d.stableRS.Name != d.newRS.Name {
+		if len(toRemove) == 0 || d.stableRS.Name != d.newRS().Name {
 			toRemove = append(toRemove, d.stableRS)
 		}
 	}
@@ -140,54 +164,54 @@ func (d *replicasetDeployer) RemoveScaleDownDeadlines() error {
 }
 
 func (d *replicasetDeployer) ReconcileNewReplicaSet() (bool, error) {
-	if d.newRS == nil {
+	if d.newRS() == nil {
 		return false, nil
 	}
-	newReplicasCount, err := replicasetutil.NewRSNewReplicas(d.rollout, d.allRSs, d.newRS)
+	newReplicasCount, err := replicasetutil.NewRSNewReplicas(d.rollout(), d.allRSs, d.newRS())
 	if err != nil {
 		return false, err
 	}
 
 	if d.shouldDelayScaleDownOnAbort() {
-		abortScaleDownDelaySeconds := defaults.GetAbortScaleDownDelaySecondsOrDefault(d.rollout)
-		d.log.Infof("Scale down new rs '%s' on abort (%v)", d.newRS.Name, abortScaleDownDelaySeconds)
+		abortScaleDownDelaySeconds := defaults.GetAbortScaleDownDelaySecondsOrDefault(d.rollout())
+		d.log.Infof("Scale down new rs '%s' on abort (%v)", d.newRS().Name, abortScaleDownDelaySeconds)
 
 		// if the newRS has scale down annotation, check if it should be scaled down now
-		if scaleDownAtStr, ok := d.newRS.Annotations[v1alpha1.DefaultReplicaSetScaleDownDeadlineAnnotationKey]; ok {
-			d.log.Infof("New rs '%s' has scaledown deadline annotation: %s", d.newRS.Name, scaleDownAtStr)
+		if scaleDownAtStr, ok := d.newRS().Annotations[v1alpha1.DefaultReplicaSetScaleDownDeadlineAnnotationKey]; ok {
+			d.log.Infof("New rs '%s' has scaledown deadline annotation: %s", d.newRS().Name, scaleDownAtStr)
 			scaleDownAtTime, err := time.Parse(time.RFC3339, scaleDownAtStr)
 			if err != nil {
-				d.log.Warnf("Unable to read scaleDownAt label on rs '%s'", d.newRS.Name)
+				d.log.Warnf("Unable to read scaleDownAt label on rs '%s'", d.newRS().Name)
 			} else {
 				now := metav1.Now()
 				scaleDownAt := metav1.NewTime(scaleDownAtTime)
 				if scaleDownAt.After(now.Time) {
-					d.log.Infof("RS '%s' has not reached the scaleDownTime", d.newRS.Name)
+					d.log.Infof("RS '%s' has not reached the scaleDownTime", d.newRS().Name)
 					remainingTime := scaleDownAt.Sub(now.Time)
 					if remainingTime < d.resyncPeriod {
-						d.enqueueRolloutAfter(d.rollout, remainingTime)
+						d.enqueueRolloutAfter(d.rollout(), remainingTime)
 						return false, nil
 					}
 				} else {
-					d.log.Infof("RS '%s' has reached the scaleDownTime", d.newRS.Name)
+					d.log.Infof("RS '%s' has reached the scaleDownTime", d.newRS().Name)
 					newReplicasCount = int32(0)
 				}
 			}
 		} else if abortScaleDownDelaySeconds != nil {
-			err = d.addScaleDownDelay(d.newRS, *abortScaleDownDelaySeconds)
+			err = d.addScaleDownDelay(d.newRS(), *abortScaleDownDelaySeconds)
 			if err != nil {
 				return false, err
 			}
 		}
 	}
 
-	scaled, _, err := d.ScaleReplicaSetAndRecordEvent(d.newRS, newReplicasCount)
+	scaled, _, err := d.ScaleReplicaSetAndRecordEvent(d.newRS(), newReplicasCount)
 	return scaled, err
 }
 
 // shouldDelayScaleDownOnAbort returns if we are aborted and we should delay scaledown of canary/preview
 func (d *replicasetDeployer) shouldDelayScaleDownOnAbort() bool {
-	return d.pauseContext.IsAborted() && defaults.GetAbortScaleDownDelaySecondsOrDefault(d.rollout) != nil
+	return d.pauseContext.IsAborted() && defaults.GetAbortScaleDownDelaySecondsOrDefault(d.rollout()) != nil
 }
 
 // ReconcileOtherReplicaSets reconciles "other" ReplicaSets.
@@ -247,7 +271,7 @@ func (d *replicasetDeployer) CleanupUnhealthyReplicas(oldRSs []*appsv1.ReplicaSe
 
 func (d *replicasetDeployer) ScaleReplicaSetAndRecordEvent(rs *appsv1.ReplicaSet, newScale int32) (bool, *appsv1.ReplicaSet, error) {
 	// No need to scale
-	if *(rs.Spec.Replicas) == newScale && !annotations.ReplicasAnnotationsNeedUpdate(rs, defaults.GetReplicasOrDefault(d.rollout.Spec.Replicas)) {
+	if *(rs.Spec.Replicas) == newScale && !annotations.ReplicasAnnotationsNeedUpdate(rs, defaults.GetReplicasOrDefault(d.rollout().Spec.Replicas)) {
 		return false, rs, nil
 	}
 	var scalingOperation string
@@ -256,7 +280,7 @@ func (d *replicasetDeployer) ScaleReplicaSetAndRecordEvent(rs *appsv1.ReplicaSet
 	} else {
 		scalingOperation = "down"
 	}
-	scaled, newRS, err := d.scaleReplicaSet(rs, newScale, d.rollout, scalingOperation)
+	scaled, newRS, err := d.scaleReplicaSet(rs, newScale, d.rollout(), scalingOperation)
 	return scaled, newRS, err
 }
 
@@ -289,18 +313,18 @@ func (d *replicasetDeployer) scaleReplicaSet(rs *appsv1.ReplicaSet, newScale int
 
 func (d *replicasetDeployer) ScaleDownDelayHelper(rs *appsv1.ReplicaSet, annotationedRSs int32, rolloutReplicas int32) (int32, int32, error) {
 	desiredReplicaCount := int32(0)
-	scaleDownRevisionLimit := GetScaleDownRevisionLimit(d.rollout)
+	scaleDownRevisionLimit := GetScaleDownRevisionLimit(d.rollout())
 	if !replicasetutil.HasScaleDownDeadline(rs) && *rs.Spec.Replicas > 0 {
 		// This ReplicaSet is scaled up but does not have a scale down deadline. Add one.
 		if annotationedRSs < scaleDownRevisionLimit {
 			annotationedRSs++
 			desiredReplicaCount = *rs.Spec.Replicas
-			scaleDownDelaySeconds := defaults.GetScaleDownDelaySecondsOrDefault(d.rollout)
+			scaleDownDelaySeconds := defaults.GetScaleDownDelaySecondsOrDefault(d.rollout())
 			err := d.addScaleDownDelay(rs, scaleDownDelaySeconds)
 			if err != nil {
 				return annotationedRSs, desiredReplicaCount, err
 			}
-			d.enqueueRolloutAfter(d.rollout, scaleDownDelaySeconds)
+			d.enqueueRolloutAfter(d.rollout(), scaleDownDelaySeconds)
 		}
 	} else if replicasetutil.HasScaleDownDeadline(rs) {
 		annotationedRSs++
@@ -313,7 +337,7 @@ func (d *replicasetDeployer) ScaleDownDelayHelper(rs *appsv1.ReplicaSet, annotat
 			} else if remainingTime != nil {
 				d.log.Infof("RS '%s' has not reached the scaleDownTime", rs.Name)
 				if *remainingTime < d.resyncPeriod {
-					d.enqueueRolloutAfter(d.rollout, *remainingTime)
+					d.enqueueRolloutAfter(d.rollout(), *remainingTime)
 				}
 				desiredReplicaCount = rolloutReplicas
 			}
@@ -321,4 +345,231 @@ func (d *replicasetDeployer) ScaleDownDelayHelper(rs *appsv1.ReplicaSet, annotat
 	}
 
 	return annotationedRSs, desiredReplicaCount, nil
+}
+
+// GetAllReplicaSetsAndSyncRevision returns all the replica sets for the provided rollout (new and all old), with new RS's and rollout's revision updated.
+//
+// 1. Get all old RSes this rollout targets, and calculate the max revision number among them (maxOldV).
+// 2. Get new RS this rollout targets (whose pod template matches rollout's), and update new RS's revision number to (maxOldV + 1),
+//    only if its revision number is smaller than (maxOldV + 1). If this step failed, we'll update it in the next rollout sync loop.
+// 3. Copy new RS's revision number to rollout (update rollout's revision). If this step failed, we'll update it in the next rollout sync loop.
+// 4. If there's no existing new RS and createIfNotExisted is true, create one with appropriate revision number (maxOldRevision + 1) and replicas.
+//    Note that the pod-template-hash will be added to adopted RSes and pods.
+//
+// Note that currently the rollout controller is using caches to avoid querying the server for reads.
+// This may lead to stale reads of replica sets, thus incorrect  v status.
+func (c *replicasetDeployer) GetAllReplicaSetsAndSyncRevision(createIfNotExisted bool) (*appsv1.ReplicaSet, error) {
+	// Get new replica set with the updated revision number
+	newRS, err := c.syncReplicaSetRevision()
+	if err != nil {
+		return nil, err
+	}
+	if newRS == nil && createIfNotExisted {
+		newRS, err = c.createDesiredReplicaSet()
+		if err != nil {
+			return nil, err
+		}
+	}
+	return newRS, nil
+}
+
+func (d *replicasetDeployer) rollout() *v1alpha1.Rollout {
+	return d.GetRollout()
+}
+
+func (d *replicasetDeployer) newRS() *appsv1.ReplicaSet {
+	return d.GetNewRS()
+}
+
+// Returns a replica set that matches the intent of the given rollout. Returns nil if the new replica set doesn't exist yet.
+// 1. Get existing new RS (the RS that the given rollout targets, whose pod template is the same as rollout's).
+// 2. If there's existing new RS, update its revision number if it's smaller than (maxOldRevision + 1), where maxOldRevision is the max revision number among all old RSes.
+func (c *replicasetDeployer) syncReplicaSetRevision() (*appsv1.ReplicaSet, error) {
+	if c.newRS() == nil {
+		return nil, nil
+	}
+	ctx := context.TODO()
+
+	// Calculate the max revision number among all old RSes
+	maxOldRevision := replicasetutil.MaxRevision(c.olderRSs)
+	// Calculate revision number for this new replica set
+	newRevision := strconv.FormatInt(maxOldRevision+1, 10)
+
+	// Latest replica set exists. We need to sync its annotations (includes copying all but
+	// annotationsToSkip from the parent rollout, and update revision and desiredReplicas)
+	// and also update the revision annotation in the rollout with the
+	// latest revision.
+	rsCopy := c.newRS().DeepCopy()
+
+	// Set existing new replica set's annotation
+	annotationsUpdated := annotations.SetNewReplicaSetAnnotations(c.rollout(), rsCopy, newRevision, true)
+	minReadySecondsNeedsUpdate := rsCopy.Spec.MinReadySeconds != c.rollout().Spec.MinReadySeconds
+	affinityNeedsUpdate := replicasetutil.IfInjectedAntiAffinityRuleNeedsUpdate(rsCopy.Spec.Template.Spec.Affinity, *c.rollout())
+
+	if annotationsUpdated || minReadySecondsNeedsUpdate || affinityNeedsUpdate {
+		rsCopy.Spec.MinReadySeconds = c.rollout().Spec.MinReadySeconds
+		rsCopy.Spec.Template.Spec.Affinity = replicasetutil.GenerateReplicaSetAffinity(*c.rollout())
+		return c.kubeclientset.AppsV1().ReplicaSets(rsCopy.ObjectMeta.Namespace).Update(ctx, rsCopy, metav1.UpdateOptions{})
+	}
+
+	// Should use the revision in existingNewRS's annotation, since it set by before
+	if err := c.setRolloutRevision(rsCopy.Annotations[annotations.RevisionAnnotation]); err != nil {
+		return nil, err
+	}
+
+	// If no other Progressing condition has been recorded and we need to estimate the progress
+	// of this rollout then it is likely that old users started caring about progress. In that
+	// case we need to take into account the first time we noticed their new replica set.
+	cond := conditions.GetRolloutCondition(c.rollout().Status, v1alpha1.RolloutProgressing)
+	if cond == nil {
+		msg := fmt.Sprintf(conditions.FoundNewRSMessage, rsCopy.Name)
+		condition := conditions.NewRolloutCondition(v1alpha1.RolloutProgressing, corev1.ConditionTrue, conditions.FoundNewRSReason, msg)
+		conditions.SetRolloutCondition(&c.rollout().Status, *condition)
+		updatedRollout, err := c.argoprojclientset.ArgoprojV1alpha1().Rollouts(c.rollout().Namespace).UpdateStatus(ctx, c.rollout(), metav1.UpdateOptions{})
+		if err != nil {
+			c.log.WithError(err).Error("Error: updating rollout revision")
+			return nil, err
+		}
+		c.SetRollout(updatedRollout)
+		c.SetNewRollout(updatedRollout)
+		c.log.Infof("Initialized Progressing condition: %v", condition)
+	}
+	return rsCopy, nil
+}
+
+func (c *replicasetDeployer) createDesiredReplicaSet() (*appsv1.ReplicaSet, error) {
+	ctx := context.TODO()
+	// Calculate the max revision number among all old RSes
+	maxOldRevision := replicasetutil.MaxRevision(c.olderRSs)
+	// Calculate revision number for this new replica set
+	newRevision := strconv.FormatInt(maxOldRevision+1, 10)
+
+	// new ReplicaSet does not exist, create one.
+	newRSTemplate := *c.rollout().Spec.Template.DeepCopy()
+	// Add default anti-affinity rule if antiAffinity bool set and RSTemplate meets requirements
+	newRSTemplate.Spec.Affinity = replicasetutil.GenerateReplicaSetAffinity(*c.rollout())
+	podTemplateSpecHash := controller.ComputeHash(&c.rollout().Spec.Template, c.rollout().Status.CollisionCount)
+	newRSTemplate.Labels = labelsutil.CloneAndAddLabel(c.rollout().Spec.Template.Labels, v1alpha1.DefaultRolloutUniqueLabelKey, podTemplateSpecHash)
+	// Add podTemplateHash label to selector.
+	newRSSelector := labelsutil.CloneSelectorAndAddLabel(c.rollout().Spec.Selector, v1alpha1.DefaultRolloutUniqueLabelKey, podTemplateSpecHash)
+
+	// Create new ReplicaSet
+	newRS := &appsv1.ReplicaSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:            c.rollout().Name + "-" + podTemplateSpecHash,
+			Namespace:       c.rollout().Namespace,
+			OwnerReferences: []metav1.OwnerReference{*metav1.NewControllerRef(c.rollout(), controllerKind)},
+			Labels:          newRSTemplate.Labels,
+		},
+		Spec: appsv1.ReplicaSetSpec{
+			Replicas:        new(int32),
+			MinReadySeconds: c.rollout().Spec.MinReadySeconds,
+			Selector:        newRSSelector,
+			Template:        newRSTemplate,
+		},
+	}
+	newRS.Spec.Replicas = pointer.Int32Ptr(0)
+	// Set new replica set's annotation
+	annotations.SetNewReplicaSetAnnotations(c.rollout(), newRS, newRevision, false)
+
+	if c.rollout().Spec.Strategy.Canary != nil || c.rollout().Spec.Strategy.BlueGreen != nil {
+		var ephemeralMetadata *v1alpha1.PodTemplateMetadata
+		if c.stableRS != nil && c.stableRS != c.newRS() {
+			// If this is a canary rollout, with ephemeral *canary* metadata, and there is a stable RS,
+			// then inject the canary metadata so that all the RS's new pods get the canary labels/annotation
+			if c.rollout().Spec.Strategy.Canary != nil {
+				ephemeralMetadata = c.rollout().Spec.Strategy.Canary.CanaryMetadata
+			} else {
+				ephemeralMetadata = c.rollout().Spec.Strategy.BlueGreen.PreviewMetadata
+			}
+		} else {
+			// Otherwise, if stableRS is nil, we are in a brand-new rollout and then this replicaset
+			// will eventually become the stableRS, so we should inject the stable labels/annotation
+			if c.rollout().Spec.Strategy.Canary != nil {
+				ephemeralMetadata = c.rollout().Spec.Strategy.Canary.StableMetadata
+			} else {
+				ephemeralMetadata = c.rollout().Spec.Strategy.BlueGreen.ActiveMetadata
+			}
+		}
+		newRS, _ = replicasetutil.SyncReplicaSetEphemeralPodMetadata(newRS, ephemeralMetadata)
+	}
+
+	// Create the new ReplicaSet. If it already exists, then we need to check for possible
+	// hash collisions. If there is any other error, we need to report it in the status of
+	// the Rollout.
+	alreadyExists := false
+	createdRS, err := c.kubeclientset.AppsV1().ReplicaSets(c.rollout().Namespace).Create(ctx, newRS, metav1.CreateOptions{})
+	switch {
+	// We may end up hitting this due to a slow cache or a fast resync of the Rollout.
+	case errors.IsAlreadyExists(err):
+		alreadyExists = true
+
+		// Fetch a copy of the ReplicaSet.
+		rs, rsErr := c.replicaSetLister.ReplicaSets(newRS.Namespace).Get(newRS.Name)
+		if rsErr != nil {
+			return nil, rsErr
+		}
+
+		// If the Rollout owns the ReplicaSet and the ReplicaSet's PodTemplateSpec is semantically
+		// deep equal to the PodTemplateSpec of the Rollout, it's the Rollout's new ReplicaSet.
+		// Otherwise, this is a hash collision and we need to increment the collisionCount field in
+		// the status of the Rollout and requeue to try the creation in the next sync.
+		controllerRef := metav1.GetControllerOf(rs)
+		if controllerRef != nil && controllerRef.UID == c.rollout().UID && replicasetutil.PodTemplateEqualIgnoreHash(&rs.Spec.Template, &c.rollout().Spec.Template) {
+			createdRS = rs
+			err = nil
+			break
+		}
+
+		// Matching ReplicaSet is not equal - increment the collisionCount in the RolloutStatus
+		// and requeue the Rollout.
+		if c.rollout().Status.CollisionCount == nil {
+			c.rollout().Status.CollisionCount = new(int32)
+		}
+		preCollisionCount := *c.rollout().Status.CollisionCount
+		*c.rollout().Status.CollisionCount++
+		// Update the collisionCount for the Rollout and let it requeue by returning the original
+		// error.
+		_, roErr := c.argoprojclientset.ArgoprojV1alpha1().Rollouts(c.rollout().Namespace).UpdateStatus(ctx, c.rollout(), metav1.UpdateOptions{})
+		if roErr == nil {
+			c.log.Warnf("Found a hash collision - bumped collisionCount (%d->%d) to resolve it", preCollisionCount, *c.rollout().Status.CollisionCount)
+		}
+		return nil, err
+	case err != nil:
+		msg := fmt.Sprintf(conditions.FailedRSCreateMessage, newRS.Name, err)
+		c.recorder.Warnf(c.rollout(), record.EventOptions{EventReason: conditions.FailedRSCreateReason}, msg)
+		newStatus := c.rollout().Status.DeepCopy()
+		cond := conditions.NewRolloutCondition(v1alpha1.RolloutProgressing, corev1.ConditionFalse, conditions.FailedRSCreateReason, msg)
+		patchErr := c.patchCondition(c.rollout(), newStatus, cond)
+		if patchErr != nil {
+			c.log.Warnf("Error Patching Rollout: %s", patchErr.Error())
+		}
+		return nil, err
+	default:
+		c.log.Infof("Created ReplicaSet %s", createdRS.Name)
+	}
+
+	if err := c.setRolloutRevision(newRevision); err != nil {
+		return nil, err
+	}
+
+	if !alreadyExists {
+		revision, _ := replicasetutil.Revision(createdRS)
+		c.recorder.Eventf(c.rollout(), record.EventOptions{EventReason: conditions.NewReplicaSetReason}, conditions.NewReplicaSetDetailedMessage, createdRS.Name, revision)
+
+		msg := fmt.Sprintf(conditions.NewReplicaSetMessage, createdRS.Name)
+		condition := conditions.NewRolloutCondition(v1alpha1.RolloutProgressing, corev1.ConditionTrue, conditions.NewReplicaSetReason, msg)
+		conditions.SetRolloutCondition(&c.rollout().Status, *condition)
+		updatedRollout, err := c.argoprojclientset.ArgoprojV1alpha1().Rollouts(c.rollout().Namespace).UpdateStatus(ctx, c.rollout(), metav1.UpdateOptions{})
+		if err != nil {
+			return nil, err
+		}
+		c.SetRollout(updatedRollout.DeepCopy())
+		if err := c.refResolver.Resolve(c.rollout()); err != nil {
+			return nil, err
+		}
+		c.SetNewRollout(updatedRollout)
+		c.log.Infof("Set rollout condition: %v", condition)
+	}
+	return createdRS, err
 }

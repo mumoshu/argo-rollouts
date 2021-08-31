@@ -18,14 +18,14 @@ import (
 func (c *rolloutContext) rolloutCanary() error {
 	var err error
 	if replicasetutil.PodTemplateOrStepsChanged(c.rollout, c.newRS) {
-		c.newRS, err = c.getAllReplicaSetsAndSyncRevision(false)
+		c.newRS, err = c.GetAllReplicaSetsAndSyncRevision(false)
 		if err != nil {
 			return err
 		}
 		return c.syncRolloutStatusCanary()
 	}
 
-	c.newRS, err = c.getAllReplicaSetsAndSyncRevision(true)
+	c.newRS, err = c.GetAllReplicaSetsAndSyncRevision(true)
 	if err != nil {
 		return err
 	}
