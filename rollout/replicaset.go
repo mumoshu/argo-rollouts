@@ -21,6 +21,7 @@ import (
 
 	"github.com/argoproj/argo-rollouts/pkg/apis/rollouts/v1alpha1"
 	clientset "github.com/argoproj/argo-rollouts/pkg/client/clientset/versioned"
+	analysisutil "github.com/argoproj/argo-rollouts/utils/analysis"
 	"github.com/argoproj/argo-rollouts/utils/annotations"
 	"github.com/argoproj/argo-rollouts/utils/conditions"
 	"github.com/argoproj/argo-rollouts/utils/defaults"
@@ -39,11 +40,11 @@ const (
 type Deployer interface {
 	RemoveScaleDownDeadlines() error
 	ReconcileNewReplicaSet() (bool, error)
-	ReconcileOtherReplicaSets(scaleDownOldReplicaSets func([]*appsv1.ReplicaSet) (bool, error)) (bool, error)
-	CleanupUnhealthyReplicas(oldRSs []*appsv1.ReplicaSet) ([]*appsv1.ReplicaSet, int32, error)
 	ScaleReplicaSetAndRecordEvent(rs *appsv1.ReplicaSet, newScale int32) (bool, *appsv1.ReplicaSet, error)
-	ScaleDownDelayHelper(rs *appsv1.ReplicaSet, annotationedRSs int32, rolloutReplicas int32) (int32, int32, error)
 	GetAllReplicaSetsAndSyncRevision(createIfNotExisted bool) (*appsv1.ReplicaSet, error)
+
+	ReconcileOthersForBlueGreen() (bool, error)
+	ReconcileOthersForCanary() (bool, error)
 
 	GetStableHash() string
 	GetCanaryHash() string
@@ -56,6 +57,9 @@ type RolloutProvider interface {
 
 	GetNewRS() *appsv1.ReplicaSet
 	GetStableRS() *appsv1.ReplicaSet
+
+	GetCurrentARs() analysisutil.CurrentAnalysisRuns
+	CheckTargetsVerified() (bool, error)
 }
 
 type replicasetDeployer struct {
@@ -217,9 +221,176 @@ func (d *replicasetDeployer) shouldDelayScaleDownOnAbort() bool {
 	return d.pauseContext.IsAborted() && defaults.GetAbortScaleDownDelaySecondsOrDefault(d.rollout()) != nil
 }
 
-// ReconcileOtherReplicaSets reconciles "other" ReplicaSets.
+func (d *replicasetDeployer) ReconcileOthersForBlueGreen() (bool, error) {
+	return d.reconcileOtherReplicaSets(d.scaleDownOldReplicaSetsForBlueGreen)
+}
+
+func (d *replicasetDeployer) ReconcileOthersForCanary() (bool, error) {
+	return d.reconcileOtherReplicaSets(d.scaleDownOldReplicaSetsForCanary)
+}
+
+// scaleDownOldReplicaSetsForBlueGreen scales down old replica sets when rollout strategy is "Blue Green".
+func (c *replicasetDeployer) scaleDownOldReplicaSetsForBlueGreen(oldRSs []*appsv1.ReplicaSet) (bool, error) {
+	if getPauseCondition(c.rollout(), v1alpha1.PauseReasonInconclusiveAnalysis) != nil {
+		c.log.Infof("Cannot scale down old ReplicaSets while paused with inconclusive Analysis ")
+		return false, nil
+	}
+	if c.rollout().Spec.Strategy.BlueGreen != nil && c.rollout().Spec.Strategy.BlueGreen.PostPromotionAnalysis != nil && c.rollout().Spec.Strategy.BlueGreen.ScaleDownDelaySeconds == nil && !skipPostPromotionAnalysisRun(c.rollout(), c.newRS()) {
+		currentPostAr := c.GetCurrentARs().BlueGreenPostPromotion
+		if currentPostAr == nil || currentPostAr.Status.Phase != v1alpha1.AnalysisPhaseSuccessful {
+			c.log.Infof("Cannot scale down old ReplicaSets while Analysis is running and no ScaleDownDelaySeconds")
+			return false, nil
+		}
+	}
+	sort.Sort(sort.Reverse(replicasetutil.ReplicaSetsByRevisionNumber(oldRSs)))
+
+	hasScaled := false
+	annotationedRSs := int32(0)
+	rolloutReplicas := defaults.GetReplicasOrDefault(c.rollout().Spec.Replicas)
+	for _, targetRS := range oldRSs {
+		if replicasetutil.IsStillReferenced(c.rollout().Status, targetRS) {
+			// We should technically never get here because we shouldn't be passing a replicaset list
+			// which includes referenced ReplicaSets. But we check just in case
+			c.log.Warnf("Prevented inadvertent scaleDown of RS '%s'", targetRS.Name)
+			continue
+		}
+		if *targetRS.Spec.Replicas == 0 {
+			// cannot scale down this ReplicaSet.
+			continue
+		}
+		var desiredReplicaCount int32
+		var err error
+		annotationedRSs, desiredReplicaCount, err = c.scaleDownDelayHelper(targetRS, annotationedRSs, rolloutReplicas)
+		if err != nil {
+			return false, err
+		}
+
+		if *targetRS.Spec.Replicas == desiredReplicaCount {
+			// already at desired account, nothing to do
+			continue
+		}
+		// Scale down.
+		_, _, err = c.ScaleReplicaSetAndRecordEvent(targetRS, desiredReplicaCount)
+		if err != nil {
+			return false, err
+		}
+		hasScaled = true
+	}
+
+	return hasScaled, nil
+}
+
+// scaleDownOldReplicaSetsForCanary scales down old replica sets when rollout strategy is "canary".
+func (c *replicasetDeployer) scaleDownOldReplicaSetsForCanary(oldRSs []*appsv1.ReplicaSet) (bool, error) {
+	// Clean up unhealthy replicas first, otherwise unhealthy replicas will block rollout
+	// and cause timeout. See https://github.com/kubernetes/kubernetes/issues/16737
+	oldRSs, totalScaledDown, err := c.cleanupUnhealthyReplicas(oldRSs)
+	if err != nil {
+		return totalScaledDown > 0, nil
+	}
+	availablePodCount := replicasetutil.GetAvailableReplicaCountForReplicaSets(c.allRSs)
+	minAvailable := defaults.GetReplicasOrDefault(c.rollout().Spec.Replicas) - replicasetutil.MaxUnavailable(c.rollout())
+	maxScaleDown := availablePodCount - minAvailable
+	if maxScaleDown <= 0 {
+		// Cannot scale down.
+		return false, nil
+	}
+	c.log.Infof("Found %d available pods, scaling down old RSes (minAvailable: %d, maxScaleDown: %d)", availablePodCount, minAvailable, maxScaleDown)
+
+	sort.Sort(sort.Reverse(replicasetutil.ReplicaSetsByRevisionNumber(oldRSs)))
+
+	if canProceed, err := c.canProceedWithScaleDownAnnotation(oldRSs); !canProceed || err != nil {
+		return false, err
+	}
+
+	annotationedRSs := int32(0)
+	rolloutReplicas := defaults.GetReplicasOrDefault(c.rollout().Spec.Replicas)
+	for _, targetRS := range oldRSs {
+		if replicasetutil.IsStillReferenced(c.rollout().Status, targetRS) {
+			// We should technically never get here because we shouldn't be passing a replicaset list
+			// which includes referenced ReplicaSets. But we check just in case
+			c.log.Warnf("Prevented inadvertent scaleDown of RS '%s'", targetRS.Name)
+			continue
+		}
+		if maxScaleDown <= 0 {
+			break
+		}
+		if *targetRS.Spec.Replicas == 0 {
+			// cannot scale down this ReplicaSet.
+			continue
+		}
+		desiredReplicaCount := int32(0)
+		if c.rollout().Spec.Strategy.Canary.TrafficRouting == nil {
+			// For basic canary, we must scale down all other ReplicaSets because existence of
+			// those pods will cause traffic to be served by them
+			if *targetRS.Spec.Replicas > maxScaleDown {
+				desiredReplicaCount = *targetRS.Spec.Replicas - maxScaleDown
+			}
+		} else {
+			// For traffic shaped canary, we leave the old ReplicaSets up until scaleDownDelaySeconds
+			annotationedRSs, desiredReplicaCount, err = c.scaleDownDelayHelper(targetRS, annotationedRSs, rolloutReplicas)
+			if err != nil {
+				return totalScaledDown > 0, err
+			}
+		}
+		if *targetRS.Spec.Replicas == desiredReplicaCount {
+			// already at desired account, nothing to do
+			continue
+		}
+		// Scale down.
+		_, _, err = c.ScaleReplicaSetAndRecordEvent(targetRS, desiredReplicaCount)
+		if err != nil {
+			return totalScaledDown > 0, err
+		}
+		scaleDownCount := *targetRS.Spec.Replicas - desiredReplicaCount
+		maxScaleDown -= scaleDownCount
+		totalScaledDown += scaleDownCount
+	}
+
+	return totalScaledDown > 0, nil
+}
+
+// canProceedWithScaleDownAnnotation returns whether or not it is safe to proceed with annotating
+// old replicasets with the scale-down-deadline in the traffic-routed canary strategy.
+// This method only matters with ALB canary + the target group verification feature.
+// The safety guarantees we provide are that we will not scale down *anything* unless we can verify
+// stable target group endpoints are registered properly.
+// NOTE: this method was written in a way which avoids AWS API calls.
+func (c *replicasetDeployer) canProceedWithScaleDownAnnotation(oldRSs []*appsv1.ReplicaSet) (bool, error) {
+	isALBCanary := c.rollout().Spec.Strategy.Canary != nil && c.rollout().Spec.Strategy.Canary.TrafficRouting != nil && c.rollout().Spec.Strategy.Canary.TrafficRouting.ALB != nil
+	if !isALBCanary {
+		// Only ALB
+		return true, nil
+	}
+
+	needToVerifyTargetGroups := false
+	for _, targetRS := range oldRSs {
+		if *targetRS.Spec.Replicas > 0 && !replicasetutil.HasScaleDownDeadline(targetRS) {
+			// We encountered an old ReplicaSet that is not yet scaled down, and is not annotated
+			// We only verify target groups if there is something to scale down.
+			needToVerifyTargetGroups = true
+			break
+		}
+	}
+	if !needToVerifyTargetGroups {
+		// All ReplicaSets are either scaled down, or have a scale-down-deadline annotation.
+		// The presence of the scale-down-deadline on all oldRSs, implies we can proceed with
+		// scale down, because we only add that annotation when target groups have been verified.
+		// Therefore, we return true to avoid performing verification again and making unnecessary
+		// AWS API calls.
+		return true, nil
+	}
+
+	canProceed, err := c.CheckTargetsVerified()
+	if err != nil {
+		return false, err
+	}
+	return canProceed, nil
+}
+
+// reconcileOtherReplicaSets reconciles "other" ReplicaSets.
 // Other ReplicaSets are ReplicaSets are neither the new or stable (allRSs - newRS - stableRS)
-func (d *replicasetDeployer) ReconcileOtherReplicaSets(scaleDownOldReplicaSets func([]*appsv1.ReplicaSet) (bool, error)) (bool, error) {
+func (d *replicasetDeployer) reconcileOtherReplicaSets(scaleDownOldReplicaSets func([]*appsv1.ReplicaSet) (bool, error)) (bool, error) {
 	otherRSs := controller.FilterActiveReplicaSets(d.otherRSs)
 	oldPodsCount := replicasetutil.GetReplicaCountForReplicaSets(otherRSs)
 	if oldPodsCount == 0 {
@@ -239,8 +410,8 @@ func (d *replicasetDeployer) ReconcileOtherReplicaSets(scaleDownOldReplicaSets f
 	return hasScaled, nil
 }
 
-// CleanupUnhealthyReplicas will scale down old replica sets with unhealthy replicas, so that all unhealthy replicas will be deleted.
-func (d *replicasetDeployer) CleanupUnhealthyReplicas(oldRSs []*appsv1.ReplicaSet) ([]*appsv1.ReplicaSet, int32, error) {
+// cleanupUnhealthyReplicas will scale down old replica sets with unhealthy replicas, so that all unhealthy replicas will be deleted.
+func (d *replicasetDeployer) cleanupUnhealthyReplicas(oldRSs []*appsv1.ReplicaSet) ([]*appsv1.ReplicaSet, int32, error) {
 	sort.Sort(controller.ReplicaSetsByCreationTimestamp(oldRSs))
 	// Safely scale down all old replica sets with unhealthy replicas. Replica set will sort the pods in the order
 	// such that not-ready < ready, unscheduled < scheduled, and pending < running. This ensures that unhealthy replicas will
@@ -314,7 +485,7 @@ func (d *replicasetDeployer) scaleReplicaSet(rs *appsv1.ReplicaSet, newScale int
 	return scaled, rs, err
 }
 
-func (d *replicasetDeployer) ScaleDownDelayHelper(rs *appsv1.ReplicaSet, annotationedRSs int32, rolloutReplicas int32) (int32, int32, error) {
+func (d *replicasetDeployer) scaleDownDelayHelper(rs *appsv1.ReplicaSet, annotationedRSs int32, rolloutReplicas int32) (int32, int32, error) {
 	desiredReplicaCount := int32(0)
 	scaleDownRevisionLimit := GetScaleDownRevisionLimit(d.rollout())
 	if !replicasetutil.HasScaleDownDeadline(rs) && *rs.Spec.Replicas > 0 {

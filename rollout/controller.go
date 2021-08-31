@@ -486,6 +486,26 @@ func (c *rolloutContext) GetStableRS() *appsv1.ReplicaSet {
 	return c.stableRS
 }
 
+func (c *rolloutContext) CheckTargetsVerified() (bool, error) {
+	stableSvc, err := c.servicesLister.Services(c.rollout.Namespace).Get(c.rollout.Spec.Strategy.Canary.StableService)
+	if err != nil {
+		return false, err
+	}
+	err = c.awsVerifyTargetGroups(stableSvc)
+	if err != nil {
+		return false, err
+	}
+
+	canProceed := c.areTargetsVerified()
+	c.log.Infof("Proceed with scaledown: %v", canProceed)
+
+	return canProceed, nil
+}
+
+func (c *rolloutContext) GetCurrentARs() analysisutil.CurrentAnalysisRuns {
+	return c.currentArs
+}
+
 func (c *rolloutContext) newDeployer() Deployer {
 	deployer := &replicasetDeployer{
 		kubeclientset: c.kubeclientset,

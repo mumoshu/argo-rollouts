@@ -2,7 +2,6 @@ package rollout
 
 import (
 	"math"
-	"sort"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -102,7 +101,7 @@ func (c *rolloutContext) reconcileBlueGreenReplicaSets(activeSvc *corev1.Service
 		return err
 	}
 	// Scale down old non-active, non-stable replicasets, if we can.
-	_, err = c.ReconcileOtherReplicaSets(c.scaleDownOldReplicaSetsForBlueGreen)
+	_, err = c.ReconcileOthersForBlueGreen()
 	if err != nil {
 		return err
 	}
@@ -200,57 +199,6 @@ func needsBlueGreenControllerPause(ro *v1alpha1.Rollout) bool {
 		}
 	}
 	return ro.Spec.Strategy.BlueGreen.AutoPromotionSeconds > 0
-}
-
-// scaleDownOldReplicaSetsForBlueGreen scales down old replica sets when rollout strategy is "Blue Green".
-func (c *rolloutContext) scaleDownOldReplicaSetsForBlueGreen(oldRSs []*appsv1.ReplicaSet) (bool, error) {
-	if getPauseCondition(c.rollout, v1alpha1.PauseReasonInconclusiveAnalysis) != nil {
-		c.log.Infof("Cannot scale down old ReplicaSets while paused with inconclusive Analysis ")
-		return false, nil
-	}
-	if c.rollout.Spec.Strategy.BlueGreen != nil && c.rollout.Spec.Strategy.BlueGreen.PostPromotionAnalysis != nil && c.rollout.Spec.Strategy.BlueGreen.ScaleDownDelaySeconds == nil && !skipPostPromotionAnalysisRun(c.rollout, c.newRS) {
-		currentPostAr := c.currentArs.BlueGreenPostPromotion
-		if currentPostAr == nil || currentPostAr.Status.Phase != v1alpha1.AnalysisPhaseSuccessful {
-			c.log.Infof("Cannot scale down old ReplicaSets while Analysis is running and no ScaleDownDelaySeconds")
-			return false, nil
-		}
-	}
-	sort.Sort(sort.Reverse(replicasetutil.ReplicaSetsByRevisionNumber(oldRSs)))
-
-	hasScaled := false
-	annotationedRSs := int32(0)
-	rolloutReplicas := defaults.GetReplicasOrDefault(c.rollout.Spec.Replicas)
-	for _, targetRS := range oldRSs {
-		if replicasetutil.IsStillReferenced(c.rollout.Status, targetRS) {
-			// We should technically never get here because we shouldn't be passing a replicaset list
-			// which includes referenced ReplicaSets. But we check just in case
-			c.log.Warnf("Prevented inadvertent scaleDown of RS '%s'", targetRS.Name)
-			continue
-		}
-		if *targetRS.Spec.Replicas == 0 {
-			// cannot scale down this ReplicaSet.
-			continue
-		}
-		var desiredReplicaCount int32
-		var err error
-		annotationedRSs, desiredReplicaCount, err = c.ScaleDownDelayHelper(targetRS, annotationedRSs, rolloutReplicas)
-		if err != nil {
-			return false, err
-		}
-
-		if *targetRS.Spec.Replicas == desiredReplicaCount {
-			// already at desired account, nothing to do
-			continue
-		}
-		// Scale down.
-		_, _, err = c.ScaleReplicaSetAndRecordEvent(targetRS, desiredReplicaCount)
-		if err != nil {
-			return false, err
-		}
-		hasScaled = true
-	}
-
-	return hasScaled, nil
 }
 
 func GetScaleDownRevisionLimit(ro *v1alpha1.Rollout) int32 {
