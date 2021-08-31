@@ -273,6 +273,8 @@ func (c *rolloutContext) syncReplicasOnly(isScaling bool) error {
 		return err
 	}
 
+	c.Deployer = c.newDeployer()
+
 	// NOTE: it is possible for newRS to be nil (e.g. when template and replicas changed at same time)
 	if c.rollout.Spec.Strategy.BlueGreen != nil {
 		previewSvc, activeSvc, err := c.getPreviewAndActiveServices()

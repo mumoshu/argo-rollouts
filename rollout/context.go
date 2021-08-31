@@ -13,6 +13,7 @@ import (
 
 type rolloutContext struct {
 	reconcilerBase
+	Deployer
 
 	log *log.Entry
 	// rollout is the rollout being reconciled

@@ -466,6 +466,24 @@ func (c *Controller) newRolloutContext(rollout *v1alpha1.Rollout) (*rolloutConte
 	return &roCtx, nil
 }
 
+func (c *rolloutContext) newDeployer() Deployer {
+	deployer := &replicasetDeployer{
+		kubeclientset:       c.kubeclientset,
+		log:                 c.log,
+		newRS:               c.newRS,
+		stableRS:            c.stableRS,
+		allRSs:              c.allRSs,
+		otherRSs:            c.otherRSs,
+		rollout:             c.rollout,
+		recorder:            c.recorder,
+		pauseContext:        c.pauseContext,
+		resyncPeriod:        c.resyncPeriod,
+		enqueueRolloutAfter: c.enqueueRolloutAfter,
+	}
+
+	return deployer
+}
+
 func (c *rolloutContext) getRolloutValidationErrors() error {
 	rolloutValidationErrors := validation.ValidateRollout(c.rollout)
 	if len(rolloutValidationErrors) > 0 {

@@ -228,7 +228,7 @@ func TestReconcileNewReplicaSet(t *testing.T) {
 				}
 			}
 
-			scaled, err := roCtx.reconcileNewReplicaSet()
+			scaled, err := roCtx.newDeployer().ReconcileNewReplicaSet()
 			if err != nil {
 				t.Errorf("unexpected error: %v", err)
 				return
@@ -323,7 +323,8 @@ func TestReconcileOldReplicaSet(t *testing.T) {
 			roCtx, err := c.newRolloutContext(rollout)
 			assert.NoError(t, err)
 			roCtx.otherRSs = []*appsv1.ReplicaSet{oldRS}
-			scaled, err := roCtx.reconcileOtherReplicaSets()
+			roCtx.Deployer = roCtx.newDeployer()
+			scaled, err := roCtx.ReconcileOtherReplicaSets(roCtx.scaleDownOldReplicaSetsForBlueGreen)
 			if err != nil {
 				t.Errorf("unexpected error: %v", err)
 				return

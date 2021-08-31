@@ -25,6 +25,8 @@ func (c *rolloutContext) rolloutBlueGreen() error {
 		return err
 	}
 
+	c.Deployer = c.newDeployer()
+
 	// This must happen right after the new replicaset is created
 	err = c.reconcilePreviewService(previewSvc)
 	if err != nil {
@@ -81,12 +83,12 @@ func (c *rolloutContext) reconcileBlueGreenStableReplicaSet(activeSvc *corev1.Se
 	}
 
 	c.log.Infof("Reconciling stable ReplicaSet '%s'", activeRS.Name)
-	_, _, err := c.scaleReplicaSetAndRecordEvent(activeRS, defaults.GetReplicasOrDefault(c.rollout.Spec.Replicas))
+	_, _, err := c.ScaleReplicaSetAndRecordEvent(activeRS, defaults.GetReplicasOrDefault(c.rollout.Spec.Replicas))
 	return err
 }
 
 func (c *rolloutContext) reconcileBlueGreenReplicaSets(activeSvc *corev1.Service) error {
-	err := c.removeScaleDownDeadlines()
+	err := c.RemoveScaleDownDeadlines()
 	if err != nil {
 		return err
 	}
@@ -94,12 +96,12 @@ func (c *rolloutContext) reconcileBlueGreenReplicaSets(activeSvc *corev1.Service
 	if err != nil {
 		return err
 	}
-	_, err = c.reconcileNewReplicaSet()
+	_, err = c.ReconcileNewReplicaSet()
 	if err != nil {
 		return err
 	}
 	// Scale down old non-active, non-stable replicasets, if we can.
-	_, err = c.reconcileOtherReplicaSets()
+	_, err = c.ReconcileOtherReplicaSets(c.scaleDownOldReplicaSetsForBlueGreen)
 	if err != nil {
 		return err
 	}
@@ -230,7 +232,7 @@ func (c *rolloutContext) scaleDownOldReplicaSetsForBlueGreen(oldRSs []*appsv1.Re
 		}
 		var desiredReplicaCount int32
 		var err error
-		annotationedRSs, desiredReplicaCount, err = c.scaleDownDelayHelper(targetRS, annotationedRSs, rolloutReplicas)
+		annotationedRSs, desiredReplicaCount, err = c.ScaleDownDelayHelper(targetRS, annotationedRSs, rolloutReplicas)
 		if err != nil {
 			return false, err
 		}
@@ -240,7 +242,7 @@ func (c *rolloutContext) scaleDownOldReplicaSetsForBlueGreen(oldRSs []*appsv1.Re
 			continue
 		}
 		// Scale down.
-		_, _, err = c.scaleReplicaSetAndRecordEvent(targetRS, desiredReplicaCount)
+		_, _, err = c.ScaleReplicaSetAndRecordEvent(targetRS, desiredReplicaCount)
 		if err != nil {
 			return false, err
 		}
