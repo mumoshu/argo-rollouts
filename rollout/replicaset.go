@@ -52,6 +52,8 @@ type Deployer interface {
 
 	GetStableHash() string
 	GetCanaryHash() string
+
+	AtDesiredReplicaCountsForCanary() bool
 }
 
 type RolloutProvider interface {
@@ -922,4 +924,8 @@ func (c *replicasetDeployer) reconcileBlueGreenStableReplicaSet(activeSvc *corev
 	c.log.Infof("Reconciling stable ReplicaSet '%s'", activeRS.Name)
 	_, _, err := c.ScaleReplicaSetAndRecordEvent(activeRS, defaults.GetReplicasOrDefault(c.rollout().Spec.Replicas))
 	return err
+}
+
+func (c *replicasetDeployer) AtDesiredReplicaCountsForCanary() bool {
+	return replicasetutil.AtDesiredReplicaCountsForCanary(c.rollout(), c.newRS(), c.stableRS(), c.otherRSs())
 }
