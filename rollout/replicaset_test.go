@@ -228,7 +228,7 @@ func TestReconcileNewReplicaSet(t *testing.T) {
 				}
 			}
 
-			scaled, err := roCtx.newDeployer().ReconcileNewReplicaSet()
+			scaled, err := roCtx.newReplicaSetDeployer().ReconcileNewReplicaSet()
 			if err != nil {
 				t.Errorf("unexpected error: %v", err)
 				return

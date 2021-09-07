@@ -519,6 +519,11 @@ func (c *rolloutContext) GetOtherExs() []*v1alpha1.Experiment {
 }
 
 func (c *rolloutContext) newDeployer() Deployer {
+	d := c.newReplicaSetDeployer()
+	return d
+}
+
+func (c *rolloutContext) newReplicaSetDeployer() *replicasetDeployer {
 	deployer := &replicasetDeployer{
 		kubeclientset: c.kubeclientset,
 		log:           c.log,
