@@ -40,7 +40,6 @@ const (
 
 type Deployer interface {
 	RemoveScaleDownDeadlines() error
-	ScaleReplicaSetAndRecordEvent(rs *appsv1.ReplicaSet, newScale int32) (bool, *appsv1.ReplicaSet, error)
 	GetAllReplicaSetsAndSyncRevision(createIfNotExisted bool) (*appsv1.ReplicaSet, error)
 
 	ReconcileOthersForBlueGreen() (bool, error)
