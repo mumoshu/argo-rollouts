@@ -48,6 +48,8 @@ type Deployer interface {
 	ReconcileBlueGreen(activeSvc *corev1.Service) error
 	ReconcileCanary() (bool, error)
 
+	ReconcileEphemeralMetadata() error
+
 	GetStableHash() string
 	GetCanaryHash() string
 }

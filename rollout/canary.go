@@ -33,7 +33,7 @@ func (c *rolloutContext) rolloutCanary() error {
 		return err
 	}
 
-	err = c.reconcileEphemeralMetadata()
+	err = c.ReconcileEphemeralMetadata()
 	if err != nil {
 		return err
 	}
