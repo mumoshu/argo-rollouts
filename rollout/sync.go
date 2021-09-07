@@ -67,7 +67,7 @@ func (c *rolloutContext) syncReplicasOnly(isScaling bool) error {
 			// so we can abort this resync
 			return err
 		}
-		return c.syncRolloutStatusBlueGreen(previewSvc, activeSvc)
+		return c.SyncRolloutStatusBlueGreen(previewSvc, activeSvc)
 	}
 	// The controller wants to use the rolloutCanary method to reconcile the rollout if the rollout is not paused.
 	// If there are no scaling events, the rollout should only sync its status
@@ -103,7 +103,7 @@ func (c *rolloutContext) syncReplicasOnly(isScaling bool) error {
 			return err
 		}
 
-		return c.syncRolloutStatusCanary()
+		return c.SyncRolloutStatusCanary()
 	}
 	return fmt.Errorf("no rollout strategy provided")
 }
@@ -130,39 +130,6 @@ func (c *rolloutContext) isScalingEvent() (bool, error) {
 		}
 	}
 	return false, nil
-}
-
-// calculateStatus calculates the common fields for all rollouts by looking into the provided replica sets.
-func (c *rolloutContext) calculateBaseStatus() v1alpha1.RolloutStatus {
-	prevStatus := c.rollout.Status
-
-	prevCond := conditions.GetRolloutCondition(prevStatus, v1alpha1.InvalidSpec)
-	err := c.getRolloutValidationErrors()
-	if err == nil && prevCond != nil {
-		conditions.RemoveRolloutCondition(&prevStatus, v1alpha1.InvalidSpec)
-	}
-
-	var currentPodHash string
-	if c.newRS == nil {
-		// newRS potentially might be nil when called by syncReplicasOnly(). For this
-		// to happen, the user would have had to simultaneously change the number of replicas, and
-		// the pod template spec at the same time.
-		currentPodHash = controller.ComputeHash(&c.rollout.Spec.Template, c.rollout.Status.CollisionCount)
-		c.log.Infof("Assuming %s for new replicaset pod hash", currentPodHash)
-	} else {
-		currentPodHash = c.newRS.Labels[v1alpha1.DefaultRolloutUniqueLabelKey]
-	}
-
-	newStatus := c.newStatus
-	newStatus.CurrentPodHash = currentPodHash
-	newStatus.Replicas = replicasetutil.GetActualReplicaCountForReplicaSets(c.allRSs)
-	newStatus.UpdatedReplicas = replicasetutil.GetActualReplicaCountForReplicaSets([]*appsv1.ReplicaSet{c.newRS})
-	newStatus.ReadyReplicas = replicasetutil.GetReadyReplicaCountForReplicaSets(c.allRSs)
-	newStatus.CollisionCount = c.rollout.Status.CollisionCount
-	newStatus.Conditions = prevStatus.Conditions
-	newStatus.RestartedAt = c.newStatus.RestartedAt
-	newStatus.PromoteFull = (newStatus.CurrentPodHash != newStatus.StableRS) && prevStatus.PromoteFull
-	return newStatus
 }
 
 // checkPausedConditions checks if the given rollout is paused or not and adds an appropriate condition.
@@ -254,7 +221,7 @@ func isIndefiniteStep(r *v1alpha1.Rollout) bool {
 	return false
 }
 
-func (c *rolloutContext) calculateRolloutConditions(newStatus v1alpha1.RolloutStatus) v1alpha1.RolloutStatus {
+func (c *rolloutContext) CalculateRolloutConditions(newStatus v1alpha1.RolloutStatus) v1alpha1.RolloutStatus {
 	isPaused := len(c.rollout.Status.PauseConditions) > 0 || c.rollout.Spec.Paused
 	isAborted := c.pauseContext.IsAborted()
 
@@ -293,10 +260,7 @@ func (c *rolloutContext) calculateRolloutConditions(newStatus v1alpha1.RolloutSt
 		case conditions.RolloutComplete(c.rollout, &newStatus):
 			// Update the rollout conditions with a message for the new replica set that
 			// was successfully deployed. If the condition already exists, we ignore this update.
-			rsName := ""
-			if c.newRS != nil {
-				rsName = c.newRS.Name
-			}
+			rsName := c.GetNewName()
 			msg := fmt.Sprintf(conditions.ReplicaSetCompletedMessage, rsName)
 			progressingCondition := conditions.NewRolloutCondition(v1alpha1.RolloutProgressing, corev1.ConditionTrue, conditions.NewRSAvailableReason, msg)
 			conditions.SetRolloutCondition(&newStatus, *progressingCondition)
@@ -373,8 +337,8 @@ func (c *rolloutContext) calculateRolloutConditions(newStatus v1alpha1.RolloutSt
 	return newStatus
 }
 
-// persistRolloutStatus persists updates to rollout status. If no changes were made, it is a no-op
-func (c *rolloutContext) persistRolloutStatus(newStatus *v1alpha1.RolloutStatus) error {
+// PersistRolloutStatus persists updates to rollout status. If no changes were made, it is a no-op
+func (c *rolloutContext) PersistRolloutStatus(newStatus *v1alpha1.RolloutStatus) error {
 	ctx := context.TODO()
 	logCtx := logutil.WithVersionFields(c.log, c.rollout)
 
@@ -521,8 +485,8 @@ func (c *rolloutContext) getReplicaFailures(allRSs []*appsv1.ReplicaSet, newRS *
 	return errorConditions
 }
 
-// resetRolloutStatus will reset the rollout status as if it is in a beginning of a new update
-func (c *rolloutContext) resetRolloutStatus(newStatus *v1alpha1.RolloutStatus) {
+// ResetRolloutStatus will reset the rollout status as if it is in a beginning of a new update
+func (c *rolloutContext) ResetRolloutStatus(newStatus *v1alpha1.RolloutStatus) {
 	c.pauseContext.ClearPauseConditions()
 	c.pauseContext.RemoveAbort()
 	c.SetRestartedAt()
@@ -535,9 +499,9 @@ func (c *rolloutContext) resetRolloutStatus(newStatus *v1alpha1.RolloutStatus) {
 	newStatus.CurrentStepIndex = replicasetutil.ResetCurrentStepIndex(c.rollout)
 }
 
-// shouldFullPromote returns a reason string explaining why a rollout should fully promote, marking
+// ShouldFullPromote returns a reason string explaining why a rollout should fully promote, marking
 // the desired ReplicaSet as stable. Returns empty string if the rollout is in middle of update
-func (c *rolloutContext) shouldFullPromote(newStatus v1alpha1.RolloutStatus) string {
+func (c *rolloutContext) ShouldFullPromote(newStatus v1alpha1.RolloutStatus) string {
 	// NOTE: the order of these checks are significant
 	if c.stableRS == nil {
 		return "Initial deploy"
@@ -595,9 +559,9 @@ func (c *rolloutContext) shouldFullPromote(newStatus v1alpha1.RolloutStatus) str
 	return ""
 }
 
-// promoteStable will take appropriate action once we have promoted the current ReplicaSet as stable
+// PromoteStable will take appropriate action once we have promoted the current ReplicaSet as stable
 // e.g. reset status conditions, emit Kubernetes events, start scaleDownDelay, etc...
-func (c *rolloutContext) promoteStable(newStatus *v1alpha1.RolloutStatus, reason string) error {
+func (c *rolloutContext) PromoteStable(newStatus *v1alpha1.RolloutStatus, reason string) error {
 	c.pauseContext.ClearPauseConditions()
 	c.pauseContext.RemoveAbort()
 	newStatus.PromoteFull = false

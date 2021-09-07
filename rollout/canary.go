@@ -20,7 +20,7 @@ func (c *rolloutContext) rolloutCanary() error {
 		if err != nil {
 			return err
 		}
-		return c.syncRolloutStatusCanary()
+		return c.SyncRolloutStatusCanary()
 	}
 
 	c.newRS, err = c.GetAllReplicaSetsAndSyncRevision(true)
@@ -58,7 +58,7 @@ func (c *rolloutContext) rolloutCanary() error {
 	err = c.reconcileAnalysisRuns()
 	if c.pauseContext.HasAddPause() {
 		c.log.Info("Detected pause due to inconclusive AnalysisRun")
-		return c.syncRolloutStatusCanary()
+		return c.SyncRolloutStatusCanary()
 	}
 	if err != nil {
 		return err
@@ -70,16 +70,16 @@ func (c *rolloutContext) rolloutCanary() error {
 	}
 	if noScalingOccurred {
 		c.log.Info("Not finished reconciling ReplicaSets")
-		return c.syncRolloutStatusCanary()
+		return c.SyncRolloutStatusCanary()
 	}
 
 	stillReconciling := c.reconcileCanaryPause()
 	if stillReconciling {
 		c.log.Infof("Not finished reconciling Canary Pause")
-		return c.syncRolloutStatusCanary()
+		return c.SyncRolloutStatusCanary()
 	}
 
-	return c.syncRolloutStatusCanary()
+	return c.SyncRolloutStatusCanary()
 }
 
 func (c *rolloutContext) reconcileCanaryPause() bool {
@@ -124,7 +124,7 @@ func (c *rolloutContext) reconcileCanaryPause() bool {
 	return true
 }
 
-func (c *rolloutContext) completedCurrentCanaryStep() bool {
+func (c *rolloutContext) CompletedCurrentCanaryStep() bool {
 	if c.rollout.Spec.Paused {
 		return false
 	}
@@ -156,31 +156,31 @@ func (c *rolloutContext) completedCurrentCanaryStep() bool {
 	return false
 }
 
-func (c *rolloutContext) syncRolloutStatusCanary() error {
+func (c *replicasetDeployer) SyncRolloutStatusCanary() error {
 	newStatus := c.calculateBaseStatus()
 	newStatus.AvailableReplicas = replicasetutil.GetAvailableReplicaCountForReplicaSets(c.allRSs)
 	newStatus.HPAReplicas = replicasetutil.GetActualReplicaCountForReplicaSets(c.allRSs)
-	newStatus.Selector = metav1.FormatLabelSelector(c.rollout.Spec.Selector)
+	newStatus.Selector = metav1.FormatLabelSelector(c.rollout().Spec.Selector)
 
-	currentStep, currentStepIndex := replicasetutil.GetCurrentCanaryStep(c.rollout)
-	newStatus.StableRS = c.rollout.Status.StableRS
-	newStatus.CurrentStepHash = conditions.ComputeStepHash(c.rollout)
-	stepCount := int32(len(c.rollout.Spec.Strategy.Canary.Steps))
+	currentStep, currentStepIndex := replicasetutil.GetCurrentCanaryStep(c.rollout())
+	newStatus.StableRS = c.rollout().Status.StableRS
+	newStatus.CurrentStepHash = conditions.ComputeStepHash(c.rollout())
+	stepCount := int32(len(c.rollout().Spec.Strategy.Canary.Steps))
 
-	if replicasetutil.PodTemplateOrStepsChanged(c.rollout, c.newRS) {
-		c.resetRolloutStatus(&newStatus)
-		if c.newRS != nil && c.rollout.Status.StableRS == replicasetutil.GetPodTemplateHash(c.newRS) {
+	if replicasetutil.PodTemplateOrStepsChanged(c.rollout(), c.newRS()) {
+		c.ResetRolloutStatus(&newStatus)
+		if c.newRS() != nil && c.rollout().Status.StableRS == replicasetutil.GetPodTemplateHash(c.newRS()) {
 			if stepCount > 0 {
 				// If we get here, we detected that we've moved back to the stable ReplicaSet
-				c.recorder.Eventf(c.rollout, record.EventOptions{EventReason: "SkipSteps"}, "Rollback to stable")
+				c.recorder.Eventf(c.rollout(), record.EventOptions{EventReason: "SkipSteps"}, "Rollback to stable")
 				newStatus.CurrentStepIndex = &stepCount
 			}
 		}
-		newStatus = c.calculateRolloutConditions(newStatus)
-		return c.persistRolloutStatus(&newStatus)
+		newStatus = c.CalculateRolloutConditions(newStatus)
+		return c.PersistRolloutStatus(&newStatus)
 	}
 
-	if c.rollout.Status.PromoteFull {
+	if c.rollout().Status.PromoteFull {
 		c.pauseContext.ClearPauseConditions()
 		c.pauseContext.RemoveAbort()
 		if stepCount > 0 {
@@ -188,13 +188,13 @@ func (c *rolloutContext) syncRolloutStatusCanary() error {
 		}
 	}
 
-	if reason := c.shouldFullPromote(newStatus); reason != "" {
-		err := c.promoteStable(&newStatus, reason)
+	if reason := c.ShouldFullPromote(newStatus); reason != "" {
+		err := c.PromoteStable(&newStatus, reason)
 		if err != nil {
 			return err
 		}
-		newStatus = c.calculateRolloutConditions(newStatus)
-		return c.persistRolloutStatus(&newStatus)
+		newStatus = c.CalculateRolloutConditions(newStatus)
+		return c.PersistRolloutStatus(&newStatus)
 	}
 
 	if c.pauseContext.IsAborted() {
@@ -205,20 +205,20 @@ func (c *rolloutContext) syncRolloutStatusCanary() error {
 				newStatus.CurrentStepIndex = pointer.Int32Ptr(0)
 			}
 		}
-		newStatus = c.calculateRolloutConditions(newStatus)
-		return c.persistRolloutStatus(&newStatus)
+		newStatus = c.CalculateRolloutConditions(newStatus)
+		return c.PersistRolloutStatus(&newStatus)
 	}
 
-	if c.completedCurrentCanaryStep() {
+	if c.CompletedCurrentCanaryStep() {
 		stepStr := rolloututil.CanaryStepString(*currentStep)
 		*currentStepIndex++
 		newStatus.Canary.CurrentStepAnalysisRunStatus = nil
 
-		c.recorder.Eventf(c.rollout, record.EventOptions{EventReason: conditions.RolloutStepCompletedReason}, conditions.RolloutStepCompletedMessage, int(*currentStepIndex), stepCount, stepStr)
+		c.recorder.Eventf(c.rollout(), record.EventOptions{EventReason: conditions.RolloutStepCompletedReason}, conditions.RolloutStepCompletedMessage, int(*currentStepIndex), stepCount, stepStr)
 		c.pauseContext.RemovePauseCondition(v1alpha1.PauseReasonCanaryPauseStep)
 	}
 
 	newStatus.CurrentStepIndex = currentStepIndex
-	newStatus = c.calculateRolloutConditions(newStatus)
-	return c.persistRolloutStatus(&newStatus)
+	newStatus = c.CalculateRolloutConditions(newStatus)
+	return c.PersistRolloutStatus(&newStatus)
 }

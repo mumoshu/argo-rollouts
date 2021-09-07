@@ -490,6 +490,10 @@ func (c *rolloutContext) GetOtherRSs() []*appsv1.ReplicaSet {
 	return c.otherRSs
 }
 
+func (c *rolloutContext) GetNewStatus() v1alpha1.RolloutStatus {
+	return c.newStatus
+}
+
 func (c *rolloutContext) CheckTargetsVerified() (bool, error) {
 	stableSvc, err := c.servicesLister.Services(c.rollout.Namespace).Get(c.rollout.Spec.Strategy.Canary.StableService)
 	if err != nil {
@@ -550,7 +554,7 @@ func (c *rolloutContext) newReplicaSetDeployer() *replicasetDeployer {
 	return deployer
 }
 
-func (c *rolloutContext) getRolloutValidationErrors() error {
+func (c *rolloutContext) GetRolloutValidationErrors() error {
 	rolloutValidationErrors := validation.ValidateRollout(c.rollout)
 	if len(rolloutValidationErrors) > 0 {
 		return rolloutValidationErrors[0]

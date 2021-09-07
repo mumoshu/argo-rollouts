@@ -33,7 +33,7 @@ func (c *rolloutContext) rolloutBlueGreen() error {
 	}
 
 	if replicasetutil.CheckPodSpecChange(c.rollout, c.newRS) {
-		return c.syncRolloutStatusBlueGreen(previewSvc, activeSvc)
+		return c.SyncRolloutStatusBlueGreen(previewSvc, activeSvc)
 	}
 
 	err = c.podRestarter.Reconcile(c)
@@ -68,7 +68,7 @@ func (c *rolloutContext) rolloutBlueGreen() error {
 		return err
 	}
 
-	return c.syncRolloutStatusBlueGreen(previewSvc, activeSvc)
+	return c.SyncRolloutStatusBlueGreen(previewSvc, activeSvc)
 }
 
 // isBlueGreenFastTracked returns true if we should skip the pause step because update has been fast tracked
@@ -175,34 +175,34 @@ func GetScaleDownRevisionLimit(ro *v1alpha1.Rollout) int32 {
 	return math.MaxInt32
 }
 
-func (c *rolloutContext) syncRolloutStatusBlueGreen(previewSvc *corev1.Service, activeSvc *corev1.Service) error {
+func (c *replicasetDeployer) SyncRolloutStatusBlueGreen(previewSvc *corev1.Service, activeSvc *corev1.Service) error {
 	newStatus := c.calculateBaseStatus()
-	newStatus.StableRS = c.rollout.Status.StableRS
+	newStatus.StableRS = c.rollout().Status.StableRS
 
-	if replicasetutil.CheckPodSpecChange(c.rollout, c.newRS) {
-		c.resetRolloutStatus(&newStatus)
+	if replicasetutil.CheckPodSpecChange(c.rollout(), c.newRS()) {
+		c.ResetRolloutStatus(&newStatus)
 	}
-	if c.rollout.Status.PromoteFull {
+	if c.rollout().Status.PromoteFull {
 		c.pauseContext.ClearPauseConditions()
 		c.pauseContext.RemoveAbort()
 	}
 
 	previewSelector := serviceutil.GetRolloutSelectorLabel(previewSvc)
-	if previewSelector != c.rollout.Status.BlueGreen.PreviewSelector {
-		c.log.Infof("Updating preview selector (%s -> %s)", c.rollout.Status.BlueGreen.PreviewSelector, previewSelector)
+	if previewSelector != c.rollout().Status.BlueGreen.PreviewSelector {
+		c.log.Infof("Updating preview selector (%s -> %s)", c.rollout().Status.BlueGreen.PreviewSelector, previewSelector)
 	}
 	newStatus.BlueGreen.PreviewSelector = previewSelector
 
 	activeSelector := serviceutil.GetRolloutSelectorLabel(activeSvc)
-	if activeSelector != c.rollout.Status.BlueGreen.ActiveSelector {
-		c.log.Infof("Updating active selector (%s -> %s)", c.rollout.Status.BlueGreen.ActiveSelector, activeSelector)
+	if activeSelector != c.rollout().Status.BlueGreen.ActiveSelector {
+		c.log.Infof("Updating active selector (%s -> %s)", c.rollout().Status.BlueGreen.ActiveSelector, activeSelector)
 	}
 	newStatus.BlueGreen.ActiveSelector = activeSelector
 
-	if reason := c.shouldFullPromote(newStatus); reason != "" {
-		c.promoteStable(&newStatus, reason)
+	if reason := c.ShouldFullPromote(newStatus); reason != "" {
+		c.PromoteStable(&newStatus, reason)
 	} else {
-		newStatus.BlueGreen.ScaleUpPreviewCheckPoint = c.calculateScaleUpPreviewCheckPoint(newStatus)
+		newStatus.BlueGreen.ScaleUpPreviewCheckPoint = c.CalculateScaleUpPreviewCheckPoint(newStatus)
 	}
 
 	activeRS, _ := replicasetutil.GetReplicaSetByTemplateHash(c.allRSs, newStatus.BlueGreen.ActiveSelector)
@@ -214,22 +214,22 @@ func (c *rolloutContext) syncRolloutStatusBlueGreen(previewSvc *corev1.Service, 
 	} else {
 		// when we do not have an active replicaset, accounting is done on the default rollout selector
 		newStatus.HPAReplicas = replicasetutil.GetActualReplicaCountForReplicaSets(c.allRSs)
-		newStatus.Selector = metav1.FormatLabelSelector(c.rollout.Spec.Selector)
+		newStatus.Selector = metav1.FormatLabelSelector(c.rollout().Spec.Selector)
 		newStatus.AvailableReplicas = replicasetutil.GetAvailableReplicaCountForReplicaSets(c.allRSs)
 		// NOTE: setting ready replicas is skipped since it's already performed in c.calculateBaseStatus() and is redundant
 		// newStatus.ReadyReplicas = replicasetutil.GetReadyReplicaCountForReplicaSets(c.allRSs)
 	}
 
-	newStatus = c.calculateRolloutConditions(newStatus)
-	return c.persistRolloutStatus(&newStatus)
+	newStatus = c.CalculateRolloutConditions(newStatus)
+	return c.PersistRolloutStatus(&newStatus)
 }
 
-// calculateScaleUpPreviewCheckPoint calculates the correct value of status.blueGreen.scaleUpPreviewCheckPoint
+// CalculateScaleUpPreviewCheckPoint calculates the correct value of status.blueGreen.scaleUpPreviewCheckPoint
 // which is used by the blueGreen.previewReplicaCount feature. scaleUpPreviewCheckPoint is a single
 // direction trip-wire, initialized to false, and gets flipped true as soon as the preview replicas
 // matches scaleUpPreviewCheckPoint and prePromotionAnalysis (if used) completes. It get reset to
 // false when the pod template changes, or the rollout fully promotes (stableRS == newRS)
-func (c *rolloutContext) calculateScaleUpPreviewCheckPoint(newStatus v1alpha1.RolloutStatus) bool {
+func (c *rolloutContext) CalculateScaleUpPreviewCheckPoint(newStatus v1alpha1.RolloutStatus) bool {
 	if c.rollout.Spec.Strategy.BlueGreen.PreviewReplicaCount == nil {
 		// previewReplicaCount feature is not being used
 		return false

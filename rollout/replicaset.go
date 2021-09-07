@@ -54,6 +54,10 @@ type Deployer interface {
 	GetCanaryHash() string
 
 	AtDesiredReplicaCountsForCanary() bool
+	GetNewName() string
+
+	SyncRolloutStatusCanary() error
+	SyncRolloutStatusBlueGreen(previewSvc *corev1.Service, activeSvc *corev1.Service) error
 }
 
 type RolloutProvider interface {
@@ -64,11 +68,21 @@ type RolloutProvider interface {
 	GetNewRS() *appsv1.ReplicaSet
 	GetStableRS() *appsv1.ReplicaSet
 	GetOtherRSs() []*appsv1.ReplicaSet
+	GetNewStatus() v1alpha1.RolloutStatus
 
 	GetCurrentARs() analysisutil.CurrentAnalysisRuns
 	GetOtherARs() []*v1alpha1.AnalysisRun
 	GetOtherExs() []*v1alpha1.Experiment
 	CheckTargetsVerified() (bool, error)
+
+	CalculateRolloutConditions(v1alpha1.RolloutStatus) v1alpha1.RolloutStatus
+	ShouldFullPromote(v1alpha1.RolloutStatus) string
+	GetRolloutValidationErrors() error
+	ResetRolloutStatus(newStatus *v1alpha1.RolloutStatus)
+	PromoteStable(newStatus *v1alpha1.RolloutStatus, reason string) error
+	PersistRolloutStatus(newStatus *v1alpha1.RolloutStatus) error
+	CalculateScaleUpPreviewCheckPoint(newStatus v1alpha1.RolloutStatus) bool
+	CompletedCurrentCanaryStep() bool
 }
 
 type replicasetDeployer struct {
@@ -928,4 +942,51 @@ func (c *replicasetDeployer) reconcileBlueGreenStableReplicaSet(activeSvc *corev
 
 func (c *replicasetDeployer) AtDesiredReplicaCountsForCanary() bool {
 	return replicasetutil.AtDesiredReplicaCountsForCanary(c.rollout(), c.newRS(), c.stableRS(), c.otherRSs())
+}
+
+func (c *replicasetDeployer) GetNewName() string {
+	rsName := ""
+	if c.newRS() != nil {
+		rsName = c.newRS().Name
+	}
+	return rsName
+}
+
+func (c *replicasetDeployer) updateStatus(newStatus *v1alpha1.RolloutStatus) {
+	newStatus.Replicas = replicasetutil.GetActualReplicaCountForReplicaSets(c.allRSs)
+	newStatus.UpdatedReplicas = replicasetutil.GetActualReplicaCountForReplicaSets([]*appsv1.ReplicaSet{c.newRS()})
+	newStatus.ReadyReplicas = replicasetutil.GetReadyReplicaCountForReplicaSets(c.allRSs)
+}
+
+// calculateStatus calculates the common fields for all rollouts by looking into the provided replica sets.
+func (c *replicasetDeployer) calculateBaseStatus() v1alpha1.RolloutStatus {
+	prevStatus := c.rollout().Status
+
+	prevCond := conditions.GetRolloutCondition(prevStatus, v1alpha1.InvalidSpec)
+	err := c.GetRolloutValidationErrors()
+	if err == nil && prevCond != nil {
+		conditions.RemoveRolloutCondition(&prevStatus, v1alpha1.InvalidSpec)
+	}
+
+	var currentPodHash string
+	if c.newRS() == nil {
+		// newRS potentially might be nil when called by syncReplicasOnly(). For this
+		// to happen, the user would have had to simultaneously change the number of replicas, and
+		// the pod template spec at the same time.
+		currentPodHash = controller.ComputeHash(&c.rollout().Spec.Template, c.rollout().Status.CollisionCount)
+		c.log.Infof("Assuming %s for new replicaset pod hash", currentPodHash)
+	} else {
+		currentPodHash = c.newRS().Labels[v1alpha1.DefaultRolloutUniqueLabelKey]
+	}
+
+	newStatus := c.GetNewStatus()
+	newStatus.CurrentPodHash = currentPodHash
+	newStatus.CollisionCount = c.rollout().Status.CollisionCount
+	newStatus.Conditions = prevStatus.Conditions
+	newStatus.RestartedAt = c.GetNewStatus().RestartedAt
+	newStatus.PromoteFull = (newStatus.CurrentPodHash != newStatus.StableRS) && prevStatus.PromoteFull
+
+	c.updateStatus(&newStatus)
+
+	return newStatus
 }

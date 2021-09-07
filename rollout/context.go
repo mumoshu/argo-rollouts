@@ -54,7 +54,7 @@ type rolloutContext struct {
 
 func (c *rolloutContext) reconcile() error {
 	// Get Rollout Validation errors
-	err := c.getRolloutValidationErrors()
+	err := c.GetRolloutValidationErrors()
 	if err != nil {
 		if vErr, ok := err.(*field.Error); ok {
 			// We want to frequently requeue rollouts with InvalidSpec errors, because the error

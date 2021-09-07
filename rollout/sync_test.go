@@ -261,7 +261,7 @@ func TestPersistWorkloadRefGeneration(t *testing.T) {
 			r.Spec.TemplateResolvedFromRef = false
 			annotations.RemoveRolloutWorkloadRefGeneration(r)
 		}
-		roCtx.persistRolloutStatus(newStatus)
+		roCtx.PersistRolloutStatus(newStatus)
 		assert.Equal(t, tc.annotatedRefGeneration, newStatus.WorkloadObservedGeneration)
 	}
 }

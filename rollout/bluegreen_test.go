@@ -880,7 +880,7 @@ func TestBlueGreenRolloutStatusHPAStatusFieldsNoActiveSelector(t *testing.T) {
 	roCtx, err := ctrl.newRolloutContext(ro)
 	assert.NoError(t, err)
 
-	err = roCtx.syncRolloutStatusBlueGreen(nil, activeSvc)
+	err = roCtx.newDeployer().SyncRolloutStatusBlueGreen(nil, activeSvc)
 	assert.Nil(t, err)
 	assert.Len(t, f.client.Actions(), 1)
 	result := f.client.Actions()[0].(core.PatchAction).GetPatch()
